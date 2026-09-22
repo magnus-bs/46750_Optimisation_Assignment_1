@@ -109,10 +109,36 @@ class FlexibleConsumerModel:
         # * naming the families "import", "export", "load", "pv" makes the standard plots of
         #   src/plotting.py work out of the box.
 
+        # Setting lb to -infinity since we will be defining their lower bounds as constraints
+        L   = m.addVars(T, lb=-GRB.INFINITY, name="load")   # Load decision variable
+        PV  = m.addVars(T, lb=-GRB.INFINITY, name="pv")     # PV production
+        IMP = m.addVars(T, lb=-GRB.INFINITY, name="import") # Import
+        EXP = m.addVars(T, lb=-GRB.INFINITY, name="export") # Export
+        self.var["load"] = L
+        self.var["pv"] = PV
+        self.var["import"] = IMP
+        self.var["export"] = EXP
+
         # --- Objective ---------------------------------------------------------------
         # TODO: express the objective function and its direction (GRB.MINIMIZE or GRB.MAXIMIZE):
         #   m.setObjective(gp.quicksum(<expression in t> for t in T), <direction>)
         # The input-data attributes (with units) are documented in src/data_loader.py (InputData).
+
+        # import and export prices with the tariffs
+        p_imp = d.energy_price + d.import_tariff
+        p_exp = d.energy_price - d.export_tariff
+
+        # Objective
+        m.setObjective(
+            gp.quicksum(
+                d.pv_marginal_cost * PV[t]
+                + p_imp[t] * IMP[t]
+                - d.consumption_utility * L[t]
+                - p_exp[t] * EXP[t]
+                for t in T
+            ),
+            GRB.MINIMIZE,
+        )
 
         # --- Constraints -------------------------------------------------------------
         # TODO: add the constraints of your formulation.
@@ -122,7 +148,25 @@ class FlexibleConsumerModel:
         #       (<lhs expression> - <rhs expression> <= 0 for t in T), name="<name>")
         # Pattern for a single constraint (dual returned as a scalar):
         #   self.con["<name>"] = m.addConstr(<lhs expression> - <rhs expression> <= 0, name="<name>")
+        self.con["balance"] = m.addConstrs(
+            (L[t] + EXP[t] - PV[t] - IMP[t] == 0 for t in T), name="balance")
 
+        self.con["load_min"] = m.addConstrs(
+            (d.load_min_kWh - L[t] <= 0 for t in T), name="load_min")
+
+        self.con["load_max"] = m.addConstrs(
+                    (L[t] - d.load_max_kWh <= 0 for t in T), name="load_max")
+
+        self.con["pv_min"] = m.addConstrs(
+            (-PV[t] <= 0 for t in T), name="pv_min")
+
+        self.con["pv_max"] = m.addConstrs(
+            (PV[t] - d.pv_max_kW <= 0 for t in T), name="pv_max")
+
+        self.con["imp_nonneg"] = m.addConstrs(
+            (-IMP[t] <= 0 for t in T), name="imp_nonneg")
+        self.con["exp_nonneg"] = m.addConstrs(
+            (-EXP[t] <= 0 for t in T), name="exp_nonneg")
         m.update()
         return self
 
