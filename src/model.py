@@ -40,6 +40,8 @@ class Results:
     question: str
     status: str
     objective: float
+    procurement_cost: float             
+    utility: float   
     hourly: pd.DataFrame                   # one row per hour: variables, prices, hourly duals
     duals: dict[str, float] = field(default_factory=dict)   # duals of non-hourly constraints
     meta: dict = field(default_factory=dict)                 # anything else worth keeping (scenario name, ...)
@@ -109,10 +111,31 @@ class FlexibleConsumerModel:
         # * naming the families "import", "export", "load", "pv" makes the standard plots of
         #   src/plotting.py work out of the box.
 
+        self.var["load"]   = m.addVars(T, name="load")     # l_t^L
+        self.var["pv"]     = m.addVars(T, name="pv")        # g_t^PV
+        self.var["import"] = m.addVars(T, name="import")    # x_t^imp
+        self.var["export"] = m.addVars(T, name="export")    # x_t^exp
+
+        l   = self.var["load"]
+        g   = self.var["pv"]
+        xi  = self.var["import"]
+        xe  = self.var["export"]
+
+        P_imp = {t: d.energy_price[t] + d.import_tariff for t in T}
+        P_exp = {t: d.energy_price[t] - d.export_tariff for t in T}
+
+
         # --- Objective ---------------------------------------------------------------
         # TODO: express the objective function and its direction (GRB.MINIMIZE or GRB.MAXIMIZE):
         #   m.setObjective(gp.quicksum(<expression in t> for t in T), <direction>)
         # The input-data attributes (with units) are documented in src/data_loader.py (InputData).
+        m.setObjective(
+             gp.quicksum(
+            d.pv_marginal_cost * g[t] + P_imp[t] * xi[t] - d.consumption_utility * l[t] - P_exp[t] * xe[t]
+            for t in T
+            ),
+            GRB.MINIMIZE,
+        )
 
         # --- Constraints -------------------------------------------------------------
         # TODO: add the constraints of your formulation.
@@ -122,6 +145,31 @@ class FlexibleConsumerModel:
         #       (<lhs expression> - <rhs expression> <= 0 for t in T), name="<name>")
         # Pattern for a single constraint (dual returned as a scalar):
         #   self.con["<name>"] = m.addConstr(<lhs expression> - <rhs expression> <= 0, name="<name>")
+        self.con["balance"] = m.addConstrs(
+            (l[t] + xe[t] - g[t] - xi[t] == 0 for t in T), name="balance")
+
+        # (1b) L^min - l_t^L <= 0  -> dual mu_t^
+        self.con["load_min"] = m.addConstrs(
+            (d.load_min_kWh - l[t] <= 0 for t in T), name="load_min")
+
+        # (1c) l_t^L - L^max <= 0  -> dual mu_bar_t^L  <-- this is the one you report in (c)
+        self.con["load_max"] = m.addConstrs(
+            (l[t] - d.load_max_kWh <= 0 for t in T), name="load_max")
+
+        # (1d) -g_t^PV <= 0
+        self.con["pv_min"] = m.addConstrs(
+            (-g[t] <= 0 for t in T), name="pv_min")
+
+        # (1e) g_t^PV - PV_t^max <= 0
+        
+        self.con["pv_max"] = m.addConstrs(
+            (g[t] - d.pv_available[t] <= 0 for t in T), name="pv_max")
+
+        # (1f), (1g): non-negativity of import/export as explicit constraints (only needed
+        # if you want their duals too — otherwise the default lb=0 above already enforces them)
+        self.con["import_nonneg"] = m.addConstrs((-xi[t] <= 0 for t in T), name="import_nonneg")
+        self.con["export_nonneg"] = m.addConstrs((-xe[t] <= 0 for t in T), name="export_nonneg")
+
 
         m.update()
         return self
@@ -167,11 +215,22 @@ class FlexibleConsumerModel:
             except (AttributeError, gp.GurobiError):
                 # No duals available (e.g. model with integer variables)
                 pass
+          # --- procurement cost and utility, split out of the objective ---------
+        g, xi, xe, l = self.var["pv"], self.var["import"], self.var["export"], self.var["load"]
+        P_imp = {t: d.energy_price[t] + d.import_tariff for t in T}
+        P_exp = {t: d.energy_price[t] - d.export_tariff for t in T}
+        procurement_cost = sum(d.pv_marginal_cost * g[t].X + P_imp[t] * xi[t].X - P_exp[t] * xe[t].X for t in T)
+        utility = sum(d.consumption_utility * l[t].X for t in T)
+        assert abs((procurement_cost - utility) - self.m.ObjVal) < 1e-6, \
+            "procurement_cost - utility should equal the objective value"        
+
 
         return Results(
             question=d.question,
             status=status,
             objective=self.m.ObjVal,
+            procurement_cost=procurement_cost,   
+            utility=utility, 
             hourly=hourly,
             duals=duals,
             meta={"scalar_variables": scalars},
