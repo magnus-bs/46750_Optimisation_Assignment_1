@@ -208,5 +208,5 @@ __marimo__/
 
 # Assignment-specific
 .DS_Store
-results/*
+#results/*
 !results/.gitkeep
