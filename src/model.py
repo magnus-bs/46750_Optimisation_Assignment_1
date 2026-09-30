@@ -155,18 +155,18 @@ class FlexibleConsumerModel:
             (d.load_min_kWh - L[t] <= 0 for t in T), name="load_min")
 
         self.con["load_max"] = m.addConstrs(
-                    (L[t] - d.load_max_kWh <= 0 for t in T), name="load_max")
+            (L[t] - d.load_max_kWh <= 0 for t in T), name="load_max")
 
         self.con["pv_min"] = m.addConstrs(
             (-PV[t] <= 0 for t in T), name="pv_min")
 
         self.con["pv_max"] = m.addConstrs(
-            (PV[t] - d.pv_max_kW <= 0 for t in T), name="pv_max")
+            (PV[t] - d.pv_available[t] <= 0 for t in T), name="pv_max")
 
         self.con["imp_nonneg"] = m.addConstrs(
-            (-IMP[t] <= 0 for t in T), name="imp_nonneg")
+            (IMP[t] >= 0 for t in T), name="imp_nonneg")
         self.con["exp_nonneg"] = m.addConstrs(
-            (-EXP[t] <= 0 for t in T), name="exp_nonneg")
+            (EXP[t] >= 0 for t in T), name="exp_nonneg")
         m.update()
         return self
 
