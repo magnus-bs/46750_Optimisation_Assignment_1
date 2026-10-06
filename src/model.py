@@ -61,6 +61,8 @@ class Results:
         cols = [c for c in self.hourly.columns if not c.startswith("dual_")]
         return (
             f"status: {self.status} | objective: {self.objective:.2f} DKK\n"
+            f"procurement cost: {self.procurement_cost:.2f} DKK\n"
+            f"utility: {self.utility:.2f} DKK\n"
             f"daily totals (kWh): " + ", ".join(f"{c}={self.hourly[c].sum():.1f}" for c in cols if c in ("import", "export", "load", "pv"))
             + (f"\nduals: {self.duals}" if self.duals else "")
         )
@@ -111,10 +113,10 @@ class FlexibleConsumerModel:
         # * naming the families "import", "export", "load", "pv" makes the standard plots of
         #   src/plotting.py work out of the box.
 
-        self.var["load"]   = m.addVars(T, name="load")     # l_t^L
-        self.var["pv"]     = m.addVars(T, name="pv")        # g_t^PV
-        self.var["import"] = m.addVars(T, name="import")    # x_t^imp
-        self.var["export"] = m.addVars(T, name="export")    # x_t^exp
+        self.var["load"]   = m.addVars(T,  lb=-GRB.INFINITY, name="load")     # l_t^L
+        self.var["pv"]     = m.addVars(T,  lb=-GRB.INFINITY, name="pv")        # g_t^PV
+        self.var["import"] = m.addVars(T, lb=-GRB.INFINITY, name="import")    # x_t^imp
+        self.var["export"] = m.addVars(T, lb=-GRB.INFINITY, name="export")    # x_t^exp
 
         l   = self.var["load"]
         g   = self.var["pv"]
