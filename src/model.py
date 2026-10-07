@@ -42,6 +42,7 @@ class Results:
     objective: float
     procurement_cost: float             
     utility: float   
+    disutility: float
     hourly: pd.DataFrame                   # one row per hour: variables, prices, hourly duals
     duals: dict[str, float] = field(default_factory=dict)   # duals of non-hourly constraints
     meta: dict = field(default_factory=dict)                 # anything else worth keeping (scenario name, ...)
@@ -62,7 +63,7 @@ class Results:
         return (
             f"status: {self.status} | objective: {self.objective:.2f} DKK\n"
             f"procurement cost: {self.procurement_cost:.2f} DKK\n"
-            f"utility: {self.utility:.2f} DKK\n"
+            f"utility: {self.utility:.2f} DKK | disutility: {self.disutility:.2f} DKK\n"
             f"daily totals (kWh): " + ", ".join(f"{c}={self.hourly[c].sum():.1f}" for c in cols if c in ("import", "export", "load", "pv"))
             + (f"\nduals: {self.duals}" if self.duals else "")
         )
@@ -128,16 +129,31 @@ class FlexibleConsumerModel:
 
 
         # --- Objective ---------------------------------------------------------------
-        # TODO: express the objective function and its direction (GRB.MINIMIZE or GRB.MAXIMIZE):
-        #   m.setObjective(gp.quicksum(<expression in t> for t in T), <direction>)
-        # The input-data attributes (with units) are documented in src/data_loader.py (InputData).
-        m.setObjective(
-             gp.quicksum(
-            d.pv_marginal_cost * g[t] + P_imp[t] * xi[t] - d.consumption_utility * l[t] - P_exp[t] * xe[t]
-            for t in T
-            ),
-            GRB.MINIMIZE,
+        # Question 1: utility enters as a benefit term, so the objective is cost minus utility.
+        # Question 2(b): linear disutility of deviation from a reference profile.
+        # Question 2(c): quadratic disutility of deviation from a reference profile.
+        objective = gp.quicksum(
+            d.pv_marginal_cost * g[t] + P_imp[t] * xi[t] - P_exp[t] * xe[t] for t in T
         )
+        if d.consumption_utility is not None:
+            objective -= gp.quicksum(d.consumption_utility * l[t] for t in T)
+        if d.linear_disutility is not None and d.reference_load is not None: # Question 2.b iii) + iv)
+            self.var["dev_plus"] = m.addVars(T, lb=0, name="dev_plus")
+            self.var["dev_minus"] = m.addVars(T, lb=0, name="dev_minus")
+            self.con["deviation"] = m.addConstrs(
+                (l[t] - d.reference_load[t] == self.var["dev_plus"][t] - self.var["dev_minus"][t] for t in T),
+                name="deviation",
+            )
+            objective += gp.quicksum(
+                d.linear_disutility * (self.var["dev_plus"][t] + self.var["dev_minus"][t])
+                for t in T
+            )
+        if d.quadratic_disutility is not None and d.reference_load is not None: # Question 2.c iii) + iv)
+            objective += gp.quicksum(
+                d.quadratic_disutility * (l[t] - d.reference_load[t]) ** 2
+                for t in T
+            )
+        m.setObjective(objective, GRB.MINIMIZE)
 
         # --- Constraints -------------------------------------------------------------
         # TODO: add the constraints of your formulation.
@@ -222,10 +238,17 @@ class FlexibleConsumerModel:
         P_imp = {t: d.energy_price[t] + d.import_tariff for t in T}
         P_exp = {t: d.energy_price[t] - d.export_tariff for t in T}
         procurement_cost = sum(d.pv_marginal_cost * g[t].X + P_imp[t] * xi[t].X - P_exp[t] * xe[t].X for t in T)
-        utility = sum(d.consumption_utility * l[t].X for t in T)
-        assert abs((procurement_cost - utility) - self.m.ObjVal) < 1e-6, \
-            "procurement_cost - utility should equal the objective value"        
-
+        utility = sum(d.consumption_utility * l[t].X for t in T) if d.consumption_utility is not None else 0.0
+        disutility = 0.0
+        if d.linear_disutility is not None and d.reference_load is not None:
+            disutility = sum(d.linear_disutility * abs(l[t].X - d.reference_load[t]) for t in T)
+        if d.quadratic_disutility is not None and d.reference_load is not None:
+            disutility = sum(
+                d.quadratic_disutility * (l[t].X - d.reference_load[t]) ** 2
+                for t in T
+            )
+        assert abs((procurement_cost - utility + disutility) - self.m.ObjVal) < 1e-6, \
+            "procurement_cost - utility + disutility should equal the objective value"
 
         return Results(
             question=d.question,
@@ -233,6 +256,7 @@ class FlexibleConsumerModel:
             objective=self.m.ObjVal,
             procurement_cost=procurement_cost,   
             utility=utility, 
+            disutility=disutility,
             hourly=hourly,
             duals=duals,
             meta={"scalar_variables": scalars},

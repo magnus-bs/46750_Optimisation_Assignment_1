@@ -86,9 +86,24 @@ experiment in `main.py`.
 **Run everything for one case**
 ```bash
 python main.py --question Q1_caseA              # base case
+python main.py --question Q2_linear             # base case + cL sensitivity plot/table
+python main.py --question Q2_quadratic          # base case + cQ sensitivity plot/table
 python main.py --question Q1_caseA --scenarios  # + example sensitivity scenarios
 python main.py --show                           # open the figures in a window
 ```
+
+Running `Q2_linear` also solves the selected \(c^L\) values (0.50, 1.40, 1.43, 1.60,
+2.09, 2.10, and 3.00 DKK/kWh), prints the requested metrics, and saves a schedule plot and
+CSV table in `results/Q2_linear/`. These scenarios are created in memory; the shared appliance
+catalogue is not modified.
+
+Running `Q2_quadratic` solves the case using the quadratic penalty
+\(c^Q \sum_t (l_t^L-l_t^{L,\mathrm{ref}})^2\), reports procurement cost and disutility separately,
+and saves the schedule and dual plots in `results/Q2_quadratic/`. It also runs the same numerical
+coefficient values as the linear sweep (0.50, 1.40, 1.43, 1.60, 2.09, 2.10, and 3.00 DKK/kWh²),
+prints the requested metrics, and saves a load-schedule plot and CSV table in
+`results/Q2_quadratic/`. The linear and quadratic coefficients have different units, so matching
+their numerical values does not imply equal penalty strength.
 
 **Use it from a notebook or your own script** (run from the repository root):
 ```python
