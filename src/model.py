@@ -40,6 +40,8 @@ class Results:
     question: str
     status: str
     objective: float
+    procurement_cost: float                 # DKK PV_cost + import_cost - export_revenue
+    utility: float                         #
     hourly: pd.DataFrame                   # one row per hour: variables, prices, hourly duals
     duals: dict[str, float] = field(default_factory=dict)   # duals of non-hourly constraints
     meta: dict = field(default_factory=dict)                 # anything else worth keeping (scenario name, ...)
@@ -59,6 +61,7 @@ class Results:
         cols = [c for c in self.hourly.columns if not c.startswith("dual_")]
         return (
             f"status: {self.status} | objective: {self.objective:.2f} DKK\n"
+            f"procurement cost: {self.procurement_cost:.2f} DKK | utility: {self.utility:.2f} DKK\n"
             f"daily totals (kWh): " + ", ".join(f"{c}={self.hourly[c].sum():.1f}" for c in cols if c in ("import", "export", "load", "pv"))
             + (f"\nduals: {self.duals}" if self.duals else "")
         )
@@ -89,8 +92,16 @@ class FlexibleConsumerModel:
         of the problem you formulated in Question 1. Keep the naming pattern below so
         that ``solve()`` can return the primal and dual values automatically.
         """
-        d, m, T = self.data, self.m, self.T
+        #d, m, T = self.data, self.m, self.T
 
+        self._add_variables()
+        self._add_constraints()
+        self._procurement = self._procurement_expr()   # DKK
+        self._preference = self._preference_expr()     # DKK
+        self.m.setObjective(self._procurement + self._preference, GRB.MINIMIZE)
+        self.m.update()
+        return self
+    
         # --- Decision variables --------------------------------------------------------
         # TODO: identify and declare the decision variables of your formulation.
         # Store every variable family in self.var["<name>"]: solve() then returns its hourly
@@ -110,35 +121,19 @@ class FlexibleConsumerModel:
         #   src/plotting.py work out of the box.
 
         # Setting lb to -infinity since we will be defining their lower bounds as constraints
-        L   = m.addVars(T, lb=-GRB.INFINITY, name="load")   # Load decision variable
-        PV  = m.addVars(T, lb=-GRB.INFINITY, name="pv")     # PV production
-        IMP = m.addVars(T, lb=-GRB.INFINITY, name="import") # Import
-        EXP = m.addVars(T, lb=-GRB.INFINITY, name="export") # Export
-        self.var["load"] = L
-        self.var["pv"] = PV
-        self.var["import"] = IMP
-        self.var["export"] = EXP
+    def _add_variables(self) -> None:
+        """Hourly load, PV production, import and export (kWh/h). Free here; bounds are explicit constraints."""
+        m, T = self.m, self.T
+        self.var["load"]   = m.addVars(T, lb=-GRB.INFINITY, name="load")    # l_t^L
+        self.var["pv"]     = m.addVars(T, lb=-GRB.INFINITY, name="pv")      # g_t^PV
+        self.var["import"] = m.addVars(T, lb=-GRB.INFINITY, name="import")  # x_t^imp
+        self.var["export"] = m.addVars(T, lb=-GRB.INFINITY, name="export")  # x_t^exp
 
         # --- Objective ---------------------------------------------------------------
         # TODO: express the objective function and its direction (GRB.MINIMIZE or GRB.MAXIMIZE):
         #   m.setObjective(gp.quicksum(<expression in t> for t in T), <direction>)
         # The input-data attributes (with units) are documented in src/data_loader.py (InputData).
 
-        # import and export prices with the tariffs
-        p_imp = d.energy_price + d.import_tariff
-        p_exp = d.energy_price - d.export_tariff
-
-        # Objective
-        m.setObjective(
-            gp.quicksum(
-                d.pv_marginal_cost * PV[t]
-                + p_imp[t] * IMP[t]
-                - d.consumption_utility * L[t]
-                - p_exp[t] * EXP[t]
-                for t in T
-            ),
-            GRB.MINIMIZE,
-        )
 
         # --- Constraints -------------------------------------------------------------
         # TODO: add the constraints of your formulation.
@@ -148,28 +143,42 @@ class FlexibleConsumerModel:
         #       (<lhs expression> - <rhs expression> <= 0 for t in T), name="<name>")
         # Pattern for a single constraint (dual returned as a scalar):
         #   self.con["<name>"] = m.addConstr(<lhs expression> - <rhs expression> <= 0, name="<name>")
+    def _add_constraints(self) -> None:
+        """Power balance, load bounds, PV bounds and non-negativity of import/export."""
+        d, m, T = self.data, self.m, self.T
+        L, PV = self.var["load"], self.var["pv"]
+        IMP, EXP = self.var["import"], self.var["export"]
+
         self.con["balance"] = m.addConstrs(
             (L[t] + EXP[t] - PV[t] - IMP[t] == 0 for t in T), name="balance")
-
         self.con["load_min"] = m.addConstrs(
             (d.load_min_kWh - L[t] <= 0 for t in T), name="load_min")
-
         self.con["load_max"] = m.addConstrs(
             (L[t] - d.load_max_kWh <= 0 for t in T), name="load_max")
-
         self.con["pv_min"] = m.addConstrs(
             (-PV[t] <= 0 for t in T), name="pv_min")
-
         self.con["pv_max"] = m.addConstrs(
             (PV[t] - d.pv_available[t] <= 0 for t in T), name="pv_max")
-
         self.con["imp_nonneg"] = m.addConstrs(
-            (IMP[t] >= 0 for t in T), name="imp_nonneg")
+            (-IMP[t] <= 0 for t in T), name="imp_nonneg")
         self.con["exp_nonneg"] = m.addConstrs(
-            (EXP[t] >= 0 for t in T), name="exp_nonneg")
-        m.update()
-        return self
+            (-EXP[t] <= 0 for t in T), name="exp_nonneg")
 
+    def _procurement_expr(self) -> gp.LinExpr:
+        """Daily procurement cost: PV production cost + import cost - export revenue (DKK)."""
+        d, T = self.data, self.T
+        PV, IMP, EXP = self.var["pv"], self.var["import"], self.var["export"]
+        p_imp = d.energy_price + d.import_tariff   # effective import price, DKK/kWh
+        p_exp = d.energy_price - d.export_tariff   # effective export price, DKK/kWh
+        return gp.quicksum(
+            d.pv_marginal_cost * PV[t] + p_imp[t] * IMP[t] - p_exp[t] * EXP[t] for t in T
+        )
+
+    def _preference_expr(self) -> gp.LinExpr:
+        """Question 1: preference cost = -utility = -u^L * sum_t l_t (DKK)."""
+        L = self.var["load"]
+        return -gp.quicksum(self.data.consumption_utility * L[t] for t in self.T)
+    
     # ------------------------------------------------------------------ 3. solve
     def solve(self) -> Results:
         """Optimise and return primal values, objective and dual values."""
@@ -212,10 +221,16 @@ class FlexibleConsumerModel:
                 # No duals available (e.g. model with integer variables)
                 pass
 
+        procurement_cost = self._procurement.getValue()
+        utility = -self._preference.getValue()   # Q2-3: utility = -disutility
+        assert abs((procurement_cost - utility) - self.m.ObjVal) < 1e-6
+
         return Results(
             question=d.question,
             status=status,
             objective=self.m.ObjVal,
+            procurement_cost=procurement_cost,
+            utility=utility,
             hourly=hourly,
             duals=duals,
             meta={"scalar_variables": scalars},
