@@ -236,7 +236,46 @@ class FlexibleConsumerModel:
             meta={"scalar_variables": scalars},
         )
 
+# =========================== Add the model from 2b ================================================
+class LinearDisutilityModel(FlexibleConsumerModel):
 
+    def __init__(self, data: InputData, name: str = "linear_disutility", verbose: bool = False):
+        if data.reference_load is None or data.linear_disutility is None:
+            raise ValueError("LinearDisutilityModel needs reference_load and linear_disutility "
+                             "(use the Q2_linear case).")
+        super().__init__(data, name, verbose)
+
+    def _add_variables(self) -> None:
+        """Base variables plus the deviation above (delta_plus) and below (delta_minus) the reference (kWh/h)."""
+        super()._add_variables()
+        self.var["delta_plus"] = self.m.addVars(self.T, lb=-GRB.INFINITY, name="delta_plus")
+        self.var["delta_minus"] = self.m.addVars(self.T, lb=-GRB.INFINITY, name="delta_minus")
+
+    def _add_constraints(self) -> None:
+        """Base constraints plus the deviation definition (10h) and non-negativity (10i)."""
+        super()._add_constraints()
+        d, m, T = self.data, self.m, self.T
+        L = self.var["load"]
+        Dp, Dm = self.var["delta_plus"], self.var["delta_minus"]
+        self.con["deviation"] = m.addConstrs(
+            (L[t] - float(d.reference_load[t]) - Dp[t] + Dm[t] == 0 for t in T), name="deviation")  # (10h)
+        self.con["delta_plus_nonneg"] = m.addConstrs(
+            (-Dp[t] <= 0 for t in T), name="delta_plus_nonneg")                                  # (10i)
+        self.con["delta_minus_nonneg"] = m.addConstrs(
+            (-Dm[t] <= 0 for t in T), name="delta_minus_nonneg") 
+
+    def _preference_expr(self) -> gp.LinExpr:
+        """Daily disutility sum_t c^L (delta_t^+ + delta_t^-) (DKK)."""
+        Dp, Dm = self.var["delta_plus"], self.var["delta_minus"]
+        return gp.quicksum(self.data.linear_disutility * (Dp[t] + Dm[t]) for t in self.T)
+
+    def _extract_results(self, status: str) -> Results:
+        """Base extraction plus the absolute hourly deviation |l_t - l_t^ref| (kWh/h)."""
+        res = super()._extract_results(status)
+        res.hourly["abs_deviation"] = res.hourly["delta_plus"] + res.hourly["delta_minus"]
+        return res
+    
+        
 _STATUS = {
     GRB.OPTIMAL: "OPTIMAL", GRB.INFEASIBLE: "INFEASIBLE", GRB.UNBOUNDED: "UNBOUNDED",
     GRB.INF_OR_UNBD: "INF_OR_UNBD", GRB.TIME_LIMIT: "TIME_LIMIT", GRB.SUBOPTIMAL: "SUBOPTIMAL",
