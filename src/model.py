@@ -274,8 +274,32 @@ class LinearDisutilityModel(FlexibleConsumerModel):
         res = super()._extract_results(status)
         res.hourly["abs_deviation"] = res.hourly["delta_plus"] + res.hourly["delta_minus"]
         return res
+
+# ================================================= Add the model from 2c ===============================================
+class QuadraticDisutilityModel(FlexibleConsumerModel):
+
+    def __init__(self, data: InputData, name: str = "quadratic_disutility", verbose: bool = False):
+        if data.reference_load is None or data.quadratic_disutility is None:
+            raise ValueError("QuadraticDisutilityModel needs reference_load and quadratic_disutility "
+                             "(use the Q2_quadratic or Q3 case).")
+        super().__init__(data, name, verbose)
+
+    def _preference_expr(self) -> gp.QuadExpr:
+        """Daily disutility sum_t c^Q (l_t - l_t^ref)^2 (DKK)."""
+        d, L = self.data, self.var["load"]
+        cQ = d.quadratic_disutility
+        return gp.quicksum(
+            cQ * (L[t] - float(d.reference_load[t])) * (L[t] - float(d.reference_load[t])) for t in self.T
+        )
+
+    def _extract_results(self, status: str) -> Results:
+        """Base extraction plus the signed and absolute hourly deviation from the reference (kWh/h)."""
+        res = super()._extract_results(status)
+        res.hourly["deviation"] = res.hourly["load"] - res.hourly["reference_load"]
+        res.hourly["abs_deviation"] = res.hourly["deviation"].abs()
+        return res
     
-        
+           
 _STATUS = {
     GRB.OPTIMAL: "OPTIMAL", GRB.INFEASIBLE: "INFEASIBLE", GRB.UNBOUNDED: "UNBOUNDED",
     GRB.INF_OR_UNBD: "INF_OR_UNBD", GRB.TIME_LIMIT: "TIME_LIMIT", GRB.SUBOPTIMAL: "SUBOPTIMAL",
