@@ -298,8 +298,28 @@ class QuadraticDisutilityModel(FlexibleConsumerModel):
         res.hourly["deviation"] = res.hourly["load"] - res.hourly["reference_load"]
         res.hourly["abs_deviation"] = res.hourly["deviation"].abs()
         return res
-    
-           
+
+# ======================================== add the model from q3 ==================================
+class MinEnergyModel(QuadraticDisutilityModel):
+
+    def __init__(self, data: InputData, name: str = "min_energy", verbose: bool = False):
+        if data.min_daily_energy_kWh is None:
+            raise ValueError("MinEnergyModel needs min_daily_energy_kWh (use the Q3 case).")
+        if data.min_daily_energy_kWh > data.n_hours * data.load_max_kWh:
+            raise ValueError(
+                f"Infeasible: E_min = {data.min_daily_energy_kWh} kWh exceeds the maximum daily "
+                f"consumption {data.n_hours * data.load_max_kWh} kWh (24 * L_max)."
+            )
+        super().__init__(data, name, verbose)
+
+    def _add_constraints(self) -> None:
+        """Constraints of 2.(c) plus the minimum daily energy requirement (13i)."""
+        super()._add_constraints()
+        L = self.var["load"]
+        self.con["min_energy"] = self.m.addConstr(
+            self.data.min_daily_energy_kWh - gp.quicksum(L[t] for t in self.T) <= 0, name="min_energy")  # (13i)
+
+
 _STATUS = {
     GRB.OPTIMAL: "OPTIMAL", GRB.INFEASIBLE: "INFEASIBLE", GRB.UNBOUNDED: "UNBOUNDED",
     GRB.INF_OR_UNBD: "INF_OR_UNBD", GRB.TIME_LIMIT: "TIME_LIMIT", GRB.SUBOPTIMAL: "SUBOPTIMAL",
