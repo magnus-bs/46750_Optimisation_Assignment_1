@@ -16,7 +16,7 @@ import matplotlib
 
 from src.data_loader import load_question, list_questions
 from src.model import FlexibleConsumerModel, LinearDisutilityModel, QuadraticDisutilityModel, MinEnergyModel, Results
-from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule
+from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison
 from src.scenarios import scale_prices, scale_pv, set_tariffs
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -70,6 +70,14 @@ def run_scenarios(question: str, out: Path) -> dict[str, Results]:
     plot_scenario_comparison(runs, "objective", save_to=out / "scenarios_cost.png")
     return runs
 
+def run_q3_comparison(out: Path) -> None:
+    """Question 3.(e): Q3 base case vs the 2.(c) consumer on the same data."""
+    data = load_question("Q3")
+    res_3 = MinEnergyModel(data).build().solve()
+    res_2c = QuadraticDisutilityModel(data).build().solve()   # ignores E_min
+    res_3.save(out, tag="with_Emin")
+    res_2c.save(out, tag="without_Emin")
+    plot_schedule(res_3, data, save_to=out / "schedule_q3_vs_2c.png", compare=res_2c)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -84,9 +92,13 @@ def main() -> None:
         matplotlib.use("Agg")
 
     base = run_base_case(args.question, out, args.show)
+    if args.question == "Q3":
+        run_q3_comparison(out)
     if args.scenarios and base is not None:
         run_scenarios(args.question, out)
     print(f"\nOutputs written to {out}")
+
+
 
 
 if __name__ == "__main__":

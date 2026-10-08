@@ -45,7 +45,8 @@ def plot_inputs(data: InputData, save_to: Path | str | None = None) -> plt.Figur
     return _finish(fig, save_to)
 
 
-def plot_schedule(results: Results, data: InputData, save_to: Path | str | None = None) -> plt.Figure:
+def plot_schedule(results: Results, data: InputData, save_to: Path | str | None = None, 
+                  compare: Results | None = None, compare_label: str = "load 2.c") -> plt.Figure:
     """Optimal schedule: load, PV used, import/export, with prices on a second axis."""
     hr = results.hourly
     h = hr.index.to_numpy()
@@ -60,6 +61,9 @@ def plot_schedule(results: Results, data: InputData, save_to: Path | str | None 
         ax.step(h, -hr["pv_available"], where="mid", color="orange", ls="--", lw=1, label="PV available")
     if "import" in hr and "export" in hr:
         ax.plot(h, hr["import"] - hr["export"], "k.-", label="net import (+) / export (-)")
+    if compare is not None:
+        ax.step(h, compare.hourly["load"], where="mid", color="green", ls="--", lw=1.5,
+                label=f"{compare_label}")
     if "reference_load" in hr:
         ax.step(h, hr["reference_load"], where="mid", color="C0", ls=":", label="reference load")
     ax.axhline(0, color="grey", lw=0.8)
@@ -106,4 +110,39 @@ def plot_scenario_comparison(
     ax.bar(names, values, color="C0")
     ax.set(ylabel=ylabel, title=f"Scenario comparison - {metric}")
     ax.tick_params(axis="x", rotation=20)
+    return _finish(fig, save_to)
+
+def plot_min_energy_comparison(res_3: Results, res_2c: Results, data: InputData, save_to: Path | str | None = None) -> plt.figure:
+    h3, h2 = res_3.hourly, res_2c.hourly
+    h = h3.index.to_numpy()
+    ref = h3["reference_load"]
+
+    fig, (ax1,ax2) = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True, gridspec_kw={"height_ratios":[3,2]})
+    # --- top: loads
+    ax1.bar(h, h3["load"], 0.8, color="C0", alpha=0.7,
+            label=f"load, Q3 with $E^{{min}}$ (Σ = {h3['load'].sum():.1f} kWh)")
+    ax1.step(h, h2["load"], where="mid", color="k", ls="--", lw=1.5,
+             label=f"load, 2.(c) unconstrained (Σ = {h2['load'].sum():.1f} kWh)")
+    ax1.step(h, ref, where="mid", color="C1", ls=":", lw=2,
+             label=f"reference (Σ = {ref.sum():.1f} kWh)")
+    ax1.set(ylabel="kWh/h", title="Optimal load with and without the minimum daily energy requirement")
+    ax1.legend(fontsize=8, loc="upper left")
+
+    # --- bottom: deviations and marginal prices
+    w = 0.4
+    ax2.bar(h - w / 2, h2["load"] - ref, w, color="grey", label="deviation 2.(c)")
+    ax2.bar(h + w / 2, h3["load"] - ref, w, color="C0", label="deviation Q3")
+    ax2.axhline(0, color="k", lw=0.8)
+    ax2.set(xlabel="hour", ylabel="$\\ell_t - \\ell_t^{ref}$ [kWh/h]")
+
+    ax3 = ax2.twinx()
+    lam = -h3["dual_balance"]                      # check sign: should equal P_imp in importing hours
+    mu_E = -res_3.duals["min_energy"]              # Gurobi: Pi <= 0 for a <= constraint in a min problem
+    ax3.step(h, lam, where="mid", color="C3", lw=1.2, label="$\\lambda_t$ (Q3)")
+    ax3.axhline(mu_E, color="C3", ls="--", lw=1.2, label=f"$\\mu^E$ = {mu_E:.2f}")
+    ax3.set_ylabel("DKK/kWh", color="C3")
+
+    l1, b1 = ax2.get_legend_handles_labels()
+    l2, b2 = ax3.get_legend_handles_labels()
+    ax2.legend(l1 + l2, b1 + b2, fontsize=8, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.25))
     return _finish(fig, save_to)
