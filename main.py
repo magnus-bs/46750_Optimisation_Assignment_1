@@ -15,8 +15,8 @@ from pathlib import Path
 import matplotlib
 
 from src.data_loader import load_question, list_questions
-from src.model import FlexibleConsumerModel, LinearDisutilityModel, QuadraticDisutilityModel, MinEnergyModel, Results
-from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison
+from src.model import FlexibleConsumerModel, LinearDisutilityModel, QuadraticDisutilityModel, MinEnergyModel, BatteryModel, Results
+from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison, plot_battery
 from src.scenarios import scale_prices, scale_pv, set_tariffs, set_disutility, set_load_preferences
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -27,6 +27,7 @@ MODELS = {
     "Q2_linear": LinearDisutilityModel,
     "Q2_quadratic": QuadraticDisutilityModel,
     "Q3": MinEnergyModel,
+    "Q3_battery": BatteryModel,
 }
 
 def run_base_case(question: str, out: Path, show: bool) -> Results | None:
@@ -92,6 +93,22 @@ def run_q3_comparison(out: Path) -> None:
     res_2c.save(out, tag="without_Emin")
     plot_schedule(res_3, data, save_to=out / "schedule_q3_vs_2c.png", compare=res_2c)
 
+def run_battery_comparison(out: Path) -> None:
+    """Question 3.(g).iv: Q3 consumer with and without the battery on the same data."""
+    data = load_question("Q3_battery")
+    res_bat = BatteryModel(data).build().solve()
+    res_nobat = MinEnergyModel(data).build().solve()     # same data, ignores the battery
+    res_bat.save(out, tag="with_battery")
+    res_nobat.save(out, tag="without_battery")
+
+    print(f"Max overlap charge/discharge : {res_bat.meta['max_overlap_kWh']:.2e} kWh")
+    print(f"Battery value                : {res_nobat.objective - res_bat.objective:.2f} DKK/day")
+    print(f"  procurement change         : {res_bat.procurement_cost - res_nobat.procurement_cost:+.2f} DKK")
+    print(f"  disutility change          : {res_nobat.utility - res_bat.utility:+.2f} DKK")
+    print(f"mu_E with / without battery  : {-res_bat.duals['min_energy']:.3f} / "
+          f"{-res_nobat.duals['min_energy']:.3f} DKK/kWh")
+    plot_battery(res_bat, data, save_to=out / "battery.png")
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--question", default="Q1_caseA", choices=list_questions(), help="data case to use")
@@ -107,6 +124,8 @@ def main() -> None:
     base = run_base_case(args.question, out, args.show)
     if args.question == "Q3":
         run_q3_comparison(out)
+    if args.question == "Q3_battery":
+        run_battery_comparison(out)
     if args.scenarios and base is not None:
         run_scenarios(args.question, out)
     print(f"\nOutputs written to {out}")

@@ -146,3 +146,44 @@ def plot_min_energy_comparison(res_3: Results, res_2c: Results, data: InputData,
     l2, b2 = ax3.get_legend_handles_labels()
     ax2.legend(l1 + l2, b1 + b2, fontsize=8, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.25))
     return _finish(fig, save_to)
+
+def plot_battery(results: Results, data: InputData, save_to: Path | str | None = None) -> plt.Figure:
+    """Battery operation (Question 3.(g)).
+
+    Top: charging (positive) and discharging (negative) per hour (kWh/h), with the effective
+    import and export prices (DKK/kWh) on a second axis.
+    Bottom: state of charge at the hour boundaries (kWh), from S^0 at the start of the day
+    to the end of hour 23, with the capacity and S^0 as reference lines.
+    """
+    hr = results.hourly
+    h = hr.index.to_numpy()
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True,
+                                   gridspec_kw={"height_ratios": [3, 2]})
+
+    # --- top: charging / discharging and effective prices
+    ax1.bar(h, hr["charge"], 0.8, color="C2", alpha=0.8, label="charging")
+    ax1.bar(h, -hr["discharge"], 0.8, color="C4", alpha=0.8, label="discharging (negative)")
+    ax1.axhline(0, color="grey", lw=0.8)
+    ax1.set(ylabel="kWh/h", title=f"Battery operation - {results.question}")
+
+    ax1b = ax1.twinx()
+    ax1b.step(h, data.energy_price + data.import_tariff, where="mid", color="C3", lw=1.2,
+              label="effective import price $P_t^{imp}$")
+    ax1b.step(h, data.energy_price - data.export_tariff, where="mid", color="C3", ls="--", lw=1.2,
+              label="effective export price $P_t^{exp}$")
+    ax1b.set_ylabel("DKK/kWh", color="C3")
+
+    l1, b1 = ax1.get_legend_handles_labels()
+    l2, b2 = ax1b.get_legend_handles_labels()
+    ax1.legend(l1 + l2, b1 + b2, fontsize=8, ncol=2, loc="upper left")
+
+    # --- bottom: state of charge at the hour boundaries
+    # soc[t] is the state at the END of hour t; bars are centred on t, so that point sits at t + 0.5
+    x_soc = np.arange(len(h) + 1) - 0.5
+    soc = np.concatenate([[data.battery_initial_soc_kWh], hr["soc"].to_numpy()])
+    ax2.plot(x_soc, soc, "k.-", label="state of charge")
+    ax2.axhline(data.battery_capacity_kWh, color="C3", ls="--", lw=1, label="capacity")
+    ax2.axhline(data.battery_initial_soc_kWh, color="grey", ls=":", lw=1, label="initial = final SoC")
+    ax2.set(xlabel="hour", ylabel="kWh", ylim=(-0.2, 1.15 * data.battery_capacity_kWh))
+    ax2.legend(fontsize=8, ncol=3, loc="upper left")
+    return _finish(fig, save_to)

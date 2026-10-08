@@ -98,6 +98,11 @@ class FlexibleConsumerModel:
         self._add_constraints()
         self._procurement = self._procurement_expr()   # DKK
         self._preference = self._preference_expr()     # DKK
+        # --- Objective ---------------------------------------------------------------
+        # TODO: express the objective function and its direction (GRB.MINIMIZE or GRB.MAXIMIZE):
+        #   m.setObjective(gp.quicksum(<expression in t> for t in T), <direction>)
+        # The input-data attributes (with units) are documented in src/data_loader.py (InputData).
+        # We define our objective function as the procurement + preference (preference is negative). And call it not as a method but 
         self.m.setObjective(self._procurement + self._preference, GRB.MINIMIZE)
         self.m.update()
         return self
@@ -129,11 +134,14 @@ class FlexibleConsumerModel:
         self.var["import"] = m.addVars(T, lb=-GRB.INFINITY, name="import")  # x_t^imp
         self.var["export"] = m.addVars(T, lb=-GRB.INFINITY, name="export")  # x_t^exp
 
-        # --- Objective ---------------------------------------------------------------
-        # TODO: express the objective function and its direction (GRB.MINIMIZE or GRB.MAXIMIZE):
-        #   m.setObjective(gp.quicksum(<expression in t> for t in T), <direction>)
-        # The input-data attributes (with units) are documented in src/data_loader.py (InputData).
 
+    # We define the balance constraint as a seperate method, so that we may alter it when we build our battery model in 3g.
+    def _balance_lhs(self, t:int) -> gp.LinExpr:
+        """Net energy demand in hour t (kWh/h); the power balance sets it to 0.
+        Subclasses with storage add the charging/discharging terms."""
+        L, PV = self.var["load"], self.var["pv"]
+        IMP, EXP = self.var["import"], self.var["export"]
+        return L[t] + EXP[t] - PV[t] - IMP[t]
 
         # --- Constraints -------------------------------------------------------------
         # TODO: add the constraints of your formulation.
@@ -150,7 +158,7 @@ class FlexibleConsumerModel:
         IMP, EXP = self.var["import"], self.var["export"]
 
         self.con["balance"] = m.addConstrs(
-            (L[t] + EXP[t] - PV[t] - IMP[t] == 0 for t in T), name="balance")
+            (self._balance_lhs(t) == 0 for t in T), name="balance") # Note that the method we defined before is used to build the constraint.
         self.con["load_min"] = m.addConstrs(
             (d.load_min_kWh - L[t] <= 0 for t in T), name="load_min")
         self.con["load_max"] = m.addConstrs(
@@ -319,6 +327,67 @@ class MinEnergyModel(QuadraticDisutilityModel):
         self.con["min_energy"] = self.m.addConstr(
             self.data.min_daily_energy_kWh - gp.quicksum(L[t] for t in self.T) <= 0, name="min_energy")  # (13i)
 
+# ======================================= Add the battery model ======================================
+class BatteryModel(MinEnergyModel):
+    """Question 3.(g): the Q3 consumer with a small battery (eqs. 16a-16k).
+
+    New variables (one per hour): charge b_t^ch and discharge b_t^dis (kWh/h), and the
+    state of charge s_t at the end of hour t (kWh). The battery starts at S^0 and must
+    return to S^0 at the end of the day (16d). Battery energy does not count towards E^min:
+    only the load l_t does.
+
+    Indexing: the report uses s_1..s_24 with s_0 = S^0; the code uses soc[0..23], so
+    soc[t] in the code is s_{t+1} in the report, and S^0 enters as a parameter.
+    """
+
+    def __init__(self, data: InputData, name: str = "battery", verbose: bool = False):
+        if data.battery_capacity_kWh is None:
+            raise ValueError("BatteryModel needs battery data (use the Q3_battery case).")
+        super().__init__(data, name, verbose)
+
+    def _add_variables(self) -> None:
+        """Variables of Q3 plus charging, discharging (kWh/h) and state of charge (kWh)."""
+        super()._add_variables()
+        m, T = self.m, self.T
+        self.var["charge"] = m.addVars(T, lb=-GRB.INFINITY, name="charge")        # b_t^ch
+        self.var["discharge"] = m.addVars(T, lb=-GRB.INFINITY, name="discharge")  # b_t^dis
+        self.var["soc"] = m.addVars(T, lb=-GRB.INFINITY, name="soc")              # s_t
+
+    def _balance_lhs(self, t: int) -> gp.LinExpr:
+        """Power balance (16b): charging adds to demand, discharging adds to supply."""
+        return super()._balance_lhs(t) + self.var["charge"][t] - self.var["discharge"][t]
+
+    def _add_constraints(self) -> None:
+        """Constraints of Q3 plus the battery constraints (16c)-(16g)."""
+        super()._add_constraints()
+        d, m, T = self.data, self.m, self.T
+        Bc, Bd, S = self.var["charge"], self.var["discharge"], self.var["soc"]
+        eta_c, eta_d = d.battery_charging_efficiency, d.battery_discharging_efficiency
+        S0, Smax = d.battery_initial_soc_kWh, d.battery_capacity_kWh
+
+        def soc_prev(t):
+            """State of charge at the start of hour t (S^0 for the first hour)."""
+            return S0 if t == 0 else S[t - 1]
+
+        self.con["soc_dynamics"] = m.addConstrs(                                    # (16c)
+            (S[t] - soc_prev(t) - eta_c * Bc[t] + Bd[t] / eta_d == 0 for t in T), name="soc_dynamics")
+        self.con["soc_end"] = m.addConstr(S[T[-1]] - S0 == 0, name="soc_end")       # (16d)
+        self.con["soc_min"] = m.addConstrs((-S[t] <= 0 for t in T), name="soc_min")             # (16e)
+        self.con["soc_max"] = m.addConstrs((S[t] - Smax <= 0 for t in T), name="soc_max")       # (16e)
+        self.con["charge_min"] = m.addConstrs((-Bc[t] <= 0 for t in T), name="charge_min")      # (16f)
+        self.con["charge_max"] = m.addConstrs(
+            (Bc[t] - d.battery_max_charge_kW <= 0 for t in T), name="charge_max")               # (16f)
+        self.con["discharge_min"] = m.addConstrs((-Bd[t] <= 0 for t in T), name="discharge_min")  # (16g)
+        self.con["discharge_max"] = m.addConstrs(
+            (Bd[t] - d.battery_max_discharge_kW <= 0 for t in T), name="discharge_max")         # (16g)
+
+    def _extract_results(self, status: str) -> Results:
+        """Q3 extraction plus the overlap check of 3.(g).ii: min(charge, discharge) per hour."""
+        res = super()._extract_results(status)
+        h = res.hourly
+        h["overlap"] = h[["charge", "discharge"]].min(axis=1)
+        res.meta["max_overlap_kWh"] = float(h["overlap"].max())
+        return res
 
 _STATUS = {
     GRB.OPTIMAL: "OPTIMAL", GRB.INFEASIBLE: "INFEASIBLE", GRB.UNBOUNDED: "UNBOUNDED",
