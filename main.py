@@ -17,7 +17,7 @@ import matplotlib
 from src.data_loader import load_question, list_questions
 from src.model import FlexibleConsumerModel, LinearDisutilityModel, QuadraticDisutilityModel, MinEnergyModel, Results
 from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison
-from src.scenarios import scale_prices, scale_pv, set_tariffs
+from src.scenarios import scale_prices, scale_pv, set_tariffs, set_disutility, set_load_preferences
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -53,20 +53,33 @@ def run_base_case(question: str, out: Path, show: bool) -> Results | None:
 def run_scenarios(question: str, out: Path) -> dict[str, Results]:
     """Example sensitivity analysis. Replace with the scenarios you design in Question 1.g."""
     base = load_question(question)
-    scenarios = {
-        "base": base,
-        "flat_prices": scale_prices(base, factor=0.0, keep_mean=True),
-        "double_spread": scale_prices(base, factor=2.0, keep_mean=True),
-        "no_tariffs": set_tariffs(base, import_tariff=0.0, export_tariff=0.0),
-        "no_pv": scale_pv(base, factor=0.0),
-    }
+    if question == "Q3":
+        scenarios={"base": base}
+        for E in [20, 25, 30, 35, 40, 60, 80, 100, 120, 140]:
+            scenarios[f"Emin_{E}"] = set_load_preferences(base, min_daily_energy_kWh=E)
+        for f in [0.0, 0.5, 1.5, 2.0]:
+            scenarios[f"spread_{f}"] = scale_prices(base, factor=f, keep_mean=True)
+        for cQ in [0.1, 0.3, 3.0, 10.0]:
+            scenarios[f"cQ_{cQ}"] = set_disutility(base, quadratic=cQ)
+    else:
+        scenarios = {
+            "base": base,
+            "flat_prices": scale_prices(base, factor=0.0, keep_mean=True),
+            "double_spread": scale_prices(base, factor=2.0, keep_mean=True),
+            "no_tariffs": set_tariffs(base, import_tariff=0.0, export_tariff=0.0),
+            "no_pv": scale_pv(base, factor=0.0),
+        }
     runs: dict[str, Results] = {}
     for name, data in scenarios.items():
         results = MODELS[question](data).build().solve()
         results.save(out, tag=name)
         runs[name] = results
         print(f"{name:>14}: cost {results.objective:8.2f} DKK | import {results.hourly['import'].sum():5.1f} kWh"
-              f" | export {results.hourly['export'].sum():5.1f} kWh")
+              f" | export {results.hourly['export'].sum():5.1f} kWh | procurement {results.procurement_cost:7.2f}" 
+              f" | disutility {-results.utility:6.2f} | load {results.hourly['load'].sum():6.1f} kWh"
+              f" | mu_E {-results.duals.get('min_energy', 0.0):5.2f}"
+              )
+        
     plot_scenario_comparison(runs, "objective", save_to=out / "scenarios_cost.png")
     return runs
 
