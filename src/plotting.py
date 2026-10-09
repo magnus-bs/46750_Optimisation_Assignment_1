@@ -147,6 +147,55 @@ def plot_min_energy_comparison(res_3: Results, res_2c: Results, data: InputData,
     ax2.legend(l1 + l2, b1 + b2, fontsize=8, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.25))
     return _finish(fig, save_to)
 
+def plot_sweep(df, xlabel: str, save_to: Path | str | None = None, log_x: bool = False,
+               vlines: dict[str, float] | None = None) -> plt.Figure:
+    """Daily metrics against a swept parameter (one row of ``df`` per value).
+
+    Panels: mu^E (DKK/kWh); procurement cost, disutility and total cost (DKK/day);
+    number of hours above / below the reference and at L^max. ``vlines`` marks
+    reference values of the parameter (e.g. sum of the reference profile).
+    """
+    x = df.index.to_numpy(dtype=float)
+    fig, axes = plt.subplots(3, 1, figsize=(8, 8), sharex=True)
+
+    axes[0].plot(x, df["mu_E"], "o-", color="C3")
+    axes[0].set(ylabel="$\\mu^E$ [DKK/kWh]")
+
+    for col, c in [("procurement", "C0"), ("disutility", "C1"), ("total_cost", "k")]:
+        axes[1].plot(x, df[col], "o-", color=c, label=col.replace("_", " "))
+    axes[1].set(ylabel="DKK/day")
+    axes[1].legend(fontsize=8)
+
+    for col, c in [("hours_above_ref", "C2"), ("hours_below_ref", "C4"), ("hours_at_Lmax", "C3")]:
+        axes[2].plot(x, df[col], "o-", color=c, label=col.replace("_", " "))
+    axes[2].set(xlabel=xlabel, ylabel="number of hours")
+    axes[2].legend(fontsize=8)
+
+    if log_x:
+        axes[2].set_xscale("log")
+    for label, v in (vlines or {}).items():
+        for ax in axes:
+            ax.axvline(v, color="grey", ls=":", lw=1)
+        axes[0].annotate(label, (v, 1), xycoords=("data", "axes fraction"), rotation=90,
+                         va="top", ha="right", fontsize=8, color="grey")
+    return _finish(fig, save_to)
+
+
+def plot_load_profiles(runs: dict, data: InputData, label: str, values: list | None = None,
+                       save_to: Path | str | None = None) -> plt.Figure:
+    """Hourly load (kWh/h) for selected values of a swept parameter, against the reference profile."""
+    values = list(runs) if values is None else values
+    h = data.hours
+    fig, ax = plt.subplots(figsize=(11, 4))
+    cmap = plt.get_cmap("viridis")
+    for i, v in enumerate(values):
+        ax.step(h, runs[v].hourly["load"], where="mid", lw=1.5,
+                color=cmap(i / max(len(values) - 1, 1)), label=f"{label} = {v:g}")
+    ax.step(h, data.reference_load, where="mid", color="k", ls=":", lw=2, label="reference")
+    ax.set(xlabel="hour", ylabel="kWh/h", title=f"Optimal load for different values of {label}")
+    ax.legend(fontsize=8, ncol=3)
+    return _finish(fig, save_to)
+
 def plot_battery(results: Results, data: InputData, save_to: Path | str | None = None) -> plt.Figure:
     """Battery operation (Question 3.(g)).
 
