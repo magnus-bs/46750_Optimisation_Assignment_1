@@ -236,3 +236,26 @@ def plot_battery(results: Results, data: InputData, save_to: Path | str | None =
     ax2.set(xlabel="hour", ylabel="kWh", ylim=(-0.2, 1.15 * data.battery_capacity_kWh))
     ax2.legend(fontsize=8, ncol=3, loc="upper left")
     return _finish(fig, save_to)
+
+def plot_deviation_profiles(runs: dict, label: str, values: list | None = None,
+                            save_to: Path | str | None = None) -> plt.Figure:
+    """Deviation from the reference (kWh/h, top) and energy price (DKK/kWh, bottom) for
+    selected values of a swept parameter. Uses the 'price' column of each run, so it also
+    shows the scenario prices when the prices themselves are varied."""
+    values = list(runs) if values is None else values
+    first = runs[values[0]].hourly
+    h = first.index.to_numpy()
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True,
+                                   gridspec_kw={"height_ratios": [3, 2]})
+    cmap = plt.get_cmap("viridis")
+    for i, v in enumerate(values):
+        hr = runs[v].hourly
+        c = cmap(i / max(len(values) - 1, 1))
+        ax1.step(h, hr["load"] - hr["reference_load"], where="mid", color=c, lw=1.5, label=f"{label} = {v:g}")
+        ax2.step(h, hr["price"], where="mid", color=c, lw=1.2)
+    ax1.axhline(0, color="k", lw=0.8)
+    ax1.set(ylabel="$l_t^L - l^{ref}$ [kWh/h]",
+            title=f"Deviation from the reference for different values of {label}")
+    ax1.legend(fontsize=8, ncol=3)
+    ax2.set(xlabel="hour", ylabel="energy price $p_t$ [DKK/kWh]")
+    return _finish(fig, save_to)

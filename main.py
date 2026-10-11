@@ -17,7 +17,7 @@ import pandas as pd
 
 from src.data_loader import load_question, list_questions
 from src.model import FlexibleConsumerModel, LinearDisutilityModel, QuadraticDisutilityModel, MinEnergyModel, BatteryModel, Results
-from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison, plot_battery, plot_sweep, plot_load_profiles
+from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison, plot_battery, plot_sweep, plot_load_profiles, plot_deviation_profiles
 from src.scenarios import scale_prices, scale_pv, set_tariffs, set_disutility, set_load_preferences
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -143,7 +143,8 @@ def run_q3_sensitivity(out: Path) -> None:
         plot_sweep(df, label, save_to=out / "sensitivity" / f"sweep_{name}.png",
                    log_x=(name == "cQ"), vlines=vlines)
         plot_load_profiles(runs, base, label, values=shown,
-                           save_to=out / "sensitivity" / f"loads_{name}.png")
+                           save_to=out / "sensitivity" / f"loads_{name}.png"),
+        plot_deviation_profiles(runs, label, values=shown, save_to=out / "sensitivity" / f"deviation_{name}.png")
 
 def run_battery_comparison(out: Path) -> None:
     """Question 3.(g).iv: Q3 consumer with and without the battery on the same data."""
