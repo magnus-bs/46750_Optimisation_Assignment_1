@@ -22,8 +22,11 @@ from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot
 from src.scenarios import scale_prices, scale_pv, set_tariffs
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
-LINEAR_DISUTILITY_VALUES = (0.50, 1.40, 1.43, 1.60, 2.09, 2.10, 3.00)
-QUADRATIC_DISUTILITY_VALUES =  (0.10, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00)
+PENALTY_SCENARIOS = (
+    ("base", 1.43, 1.00),
+    ("low_penalty", 1.40, 0.25),
+    ("high_penalty", 2.40, 2.00),
+)
 
 
 def run_base_case(question: str, out: Path, show: bool) -> Results | None:
@@ -40,7 +43,9 @@ def run_base_case(question: str, out: Path, show: bool) -> Results | None:
 
     print(results, "\n")
     if data.reference_load is not None and (
-        data.linear_disutility is not None or data.quadratic_disutility is not None
+        data.linear_disutility is not None
+        or data.quadratic_disutility is not None
+        or data.rolling_disutility is not None
     ):
         load = results.hourly["load"].to_numpy()
         deviation = load - data.reference_load
@@ -55,11 +60,15 @@ def run_base_case(question: str, out: Path, show: bool) -> Results | None:
             and abs(abs_deviation[t] - allowed_deviation[t]) <= 1e-6
             for t in range(data.n_hours)
         )
-        coefficient = (
-            f"cL={data.linear_disutility:.3f} DKK/kWh"
-            if data.linear_disutility is not None
-            else f"cQ={data.quadratic_disutility:.3f} DKK/kWh2"
-        )
+        if data.linear_disutility is not None:
+            coefficient = f"cL={data.linear_disutility:.3f} DKK/kWh"
+        elif data.quadratic_disutility is not None:
+            coefficient = f"cQ={data.quadratic_disutility:.3f} DKK/kWh2"
+        else:
+            coefficient = (
+                f"cW={data.rolling_disutility:.3f} DKK/kWh2, "
+                f"w={data.rolling_window_hours} h"
+            )
         print(
             f"disutility metrics ({coefficient}):\n"
             f"  procurement cost          : {results.procurement_cost:.2f} DKK\n"
@@ -68,6 +77,24 @@ def run_base_case(question: str, out: Path, show: bool) -> Results | None:
             f"  total absolute deviation  : {abs_deviation.sum():.2f} kWh\n"
             f"  deviation-bound hours     : {binding_hours}\n"
         )
+        if data.rolling_disutility is not None:
+            active_hours = [
+                t for t in range(data.n_hours) if abs(deviation[t]) > 1e-6
+            ]
+            max_deviation_hour = int(abs_deviation.argmax())
+            print(
+                "hourly deviations (nonzero hours):\n"
+                f"  {'hour':>4} {'reference':>10} {'load':>10} {'deviation':>10}"
+            )
+            for t in active_hours:
+                print(
+                    f"  {t:4d} {data.reference_load[t]:10.3f} "
+                    f"{load[t]:10.3f} {deviation[t]:+10.3f}"
+                )
+            print(
+                f"  maximum absolute deviation: {abs_deviation[max_deviation_hour]:.3f} kWh "
+                f"at hour {max_deviation_hour}\n"
+            )
     results.save(out)
     plot_schedule(results, data, save_to=out / "schedule.png")
     plot_duals(results, data, save_to=out / "duals.png")
@@ -98,20 +125,20 @@ def run_scenarios(question: str, out: Path) -> dict[str, Results]:
 
 
 def run_linear_disutility_sweep(out: Path) -> None:
-    """Run the selected Q2(b) cL cases, print metrics, and plot load schedules."""
+    """Run the base, low-penalty, and high-penalty Q2(b) cL scenarios."""
     base = load_question("Q2_linear")
     if base.reference_load is None or base.linear_disutility is None:
         raise ValueError("Q2_linear must define a reference profile and linear disutility coefficient")
 
     hours = list(range(base.n_hours))
-    rows: list[dict[str, float | int]] = []
+    rows: list[dict[str, str | float | int]] = []
     figure, axis = matplotlib.pyplot.subplots(figsize=(11, 6))
     axis.step(hours, base.reference_load, where="mid", color="black", linestyle="--",
               linewidth=2, label="reference load")
 
-    for coefficient in LINEAR_DISUTILITY_VALUES:
+    for scenario, coefficient, _ in PENALTY_SCENARIOS:
         data = replace(base, linear_disutility=coefficient)
-        results = FlexibleConsumerModel(data, name=f"q2_linear_cL_{coefficient:g}").build().solve()
+        results = FlexibleConsumerModel(data, name=f"q2_linear_{scenario}").build().solve()
         load = results.hourly["load"].to_numpy()
         deviation = load - data.reference_load
         absolute_deviation = abs(deviation)
@@ -126,6 +153,7 @@ def run_linear_disutility_sweep(out: Path) -> None:
             for t in hours
         )
         rows.append({
+            "scenario": scenario,
             "cL_DKK_per_kWh": coefficient,
             "procurement_cost_DKK": results.procurement_cost,
             "total_disutility_DKK": coefficient * absolute_deviation.sum(),
@@ -134,12 +162,12 @@ def run_linear_disutility_sweep(out: Path) -> None:
             "deviation_bound_hours": binding_hours,
         })
         axis.step(hours, load, where="mid", linewidth=1.5,
-                  label=f"$c^L$={coefficient:g}")
+                  label=f"{scenario.replace('_', ' ')} ($c^L$={coefficient:g})")
 
     axis.set(
         xlabel="Hour",
         ylabel="Load (kWh/h)",
-        title="Load schedules for different linear disutility coefficients", # Q2(b) iv)
+        title="Q2(b) load schedules by penalty scenario",
         xlim=(0, base.n_hours - 1),
     )
     axis.grid(True, alpha=0.25)
@@ -159,11 +187,12 @@ def run_linear_disutility_sweep(out: Path) -> None:
 
     print("\nQ2(b) linear disutility sensitivity results")
     print(
-        f"{'cL':>6} {'procurement':>14} {'disutility':>12} {'energy':>10} "
+        f"{'scenario':>13} {'cL':>6} {'procurement':>14} {'disutility':>12} {'energy':>10} "
         f"{'abs deviation':>15} {'bound hours':>13}"
     )
     for row in rows:
         print(
+            f"{row['scenario']:>13} "
             f"{row['cL_DKK_per_kWh']:6.2f} "
             f"{row['procurement_cost_DKK']:14.2f} "
             f"{row['total_disutility_DKK']:12.2f} "
@@ -175,20 +204,20 @@ def run_linear_disutility_sweep(out: Path) -> None:
 
 
 def run_quadratic_disutility_sweep(out: Path) -> None:
-    """Run the selected Q2(c) cQ cases, print metrics, and plot load schedules."""
+    """Run the base, low-penalty, and high-penalty Q2(c) cQ scenarios."""
     base = load_question("Q2_quadratic")
     if base.reference_load is None or base.quadratic_disutility is None:
         raise ValueError("Q2_quadratic must define a reference profile and quadratic disutility coefficient")
 
     hours = list(range(base.n_hours))
-    rows: list[dict[str, float | int]] = []
+    rows: list[dict[str, str | float | int]] = []
     figure, axis = matplotlib.pyplot.subplots(figsize=(11, 6))
     axis.step(hours, base.reference_load, where="mid", color="black", linestyle="--",
               linewidth=2, label="reference load")
 
-    for coefficient in QUADRATIC_DISUTILITY_VALUES:
+    for scenario, _, coefficient in PENALTY_SCENARIOS:
         data = replace(base, quadratic_disutility=coefficient)
-        results = FlexibleConsumerModel(data, name=f"q2_quadratic_cQ_{coefficient:g}").build().solve()
+        results = FlexibleConsumerModel(data, name=f"q2_quadratic_{scenario}").build().solve()
         load = results.hourly["load"].to_numpy()
         deviation = load - data.reference_load
         absolute_deviation = abs(deviation)
@@ -203,6 +232,7 @@ def run_quadratic_disutility_sweep(out: Path) -> None:
             for t in hours
         )
         rows.append({
+            "scenario": scenario,
             "cQ_DKK_per_kWh2": coefficient,
             "procurement_cost_DKK": results.procurement_cost,
             "total_disutility_DKK": results.disutility,
@@ -211,12 +241,12 @@ def run_quadratic_disutility_sweep(out: Path) -> None:
             "deviation_bound_hours": binding_hours,
         })
         axis.step(hours, load, where="mid", linewidth=1.5,
-                  label=f"$c^Q$={coefficient:g}")
+                  label=f"{scenario.replace('_', ' ')} ($c^Q$={coefficient:g})")
 
     axis.set(
         xlabel="Hour",
         ylabel="Load (kWh/h)",
-        title="Load schedules for different quadratic disutility coefficients",
+        title="Q2(c) load schedules by penalty scenario",
         xlim=(0, base.n_hours - 1),
     )
     axis.grid(True, alpha=0.25)
@@ -236,11 +266,12 @@ def run_quadratic_disutility_sweep(out: Path) -> None:
 
     print("\nQ2(c) quadratic disutility sensitivity results")
     print(
-        f"{'cQ':>6} {'procurement':>14} {'disutility':>12} {'energy':>10} "
+        f"{'scenario':>13} {'cQ':>6} {'procurement':>14} {'disutility':>12} {'energy':>10} "
         f"{'abs deviation':>15} {'bound hours':>13}"
     )
     for row in rows:
         print(
+            f"{row['scenario']:>13} "
             f"{row['cQ_DKK_per_kWh2']:6.2f} "
             f"{row['procurement_cost_DKK']:14.2f} "
             f"{row['total_disutility_DKK']:12.2f} "

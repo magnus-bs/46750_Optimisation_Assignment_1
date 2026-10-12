@@ -70,6 +70,7 @@ data/
   params_Q1_caseB.json
   params_Q2_linear.json
   params_Q2_quadratic.json
+  params_Q2_temporal.json
   params_Q3.json
   params_Q3_battery.json
 results/                 Written by main.py (git-ignored)
@@ -88,22 +89,31 @@ experiment in `main.py`.
 python main.py --question Q1_caseA              # base case
 python main.py --question Q2_linear             # base case + cL sensitivity plot/table
 python main.py --question Q2_quadratic          # base case + cQ sensitivity plot/table
+python main.py --question Q2_temporal           # rolling-window disutility (Question 2.e)
 python main.py --question Q1_caseA --scenarios  # + example sensitivity scenarios
 python main.py --show                           # open the figures in a window
 ```
 
-Running `Q2_linear` also solves the selected \(c^L\) values (0.50, 1.40, 1.43, 1.60,
-2.09, 2.10, and 3.00 DKK/kWh), prints the requested metrics, and saves a schedule plot and
-CSV table in `results/Q2_linear/`. These scenarios are created in memory; the shared appliance
-catalogue is not modified.
+Running `Q2_linear` also solves three \(c^L\) penalty scenarios: base (1.43 DKK/kWh), low
+penalty (1.40 DKK/kWh), and high penalty (2.40 DKK/kWh). It prints the requested metrics and
+saves a schedule plot and CSV table in `results/Q2_linear/`. These scenarios are created in memory;
+the shared appliance catalogue is not modified.
 
 Running `Q2_quadratic` solves the case using the quadratic penalty
 \(c^Q \sum_t (l_t^L-l_t^{L,\mathrm{ref}})^2\), reports procurement cost and disutility separately,
-and saves the schedule and dual plots in `results/Q2_quadratic/`. It also runs the same numerical
-coefficient values as the linear sweep (0.50, 1.40, 1.43, 1.60, 2.09, 2.10, and 3.00 DKK/kWh²),
-prints the requested metrics, and saves a load-schedule plot and CSV table in
-`results/Q2_quadratic/`. The linear and quadratic coefficients have different units, so matching
-their numerical values does not imply equal penalty strength.
+and saves the schedule and dual plots in `results/Q2_quadratic/`. The quadratic sweep evaluates
+base (1.00 DKK/kWh²), low penalty (0.25 DKK/kWh²), and high penalty (2.00 DKK/kWh²), prints the
+requested metrics, and saves a load-schedule plot and CSV table in `results/Q2_quadratic/`. The
+linear and quadratic models remain separate, and their coefficients have different units.
+
+Running `Q2_temporal` uses a three-hour rolling sum of signed load deviations from the
+reference profile, with \(c^W=1/9\) DKK/kWh². Its objective penalty is
+\(c^W\sum_t(\sum_{k=0}^{w-1}a_{t-k})^2\), where \(a_t=l_t-l_t^{\mathrm{ref}}\) and
+deviations before the horizon are zero. The coefficient \(1/9\) scales the three-hour
+accumulated deviation to roughly match the existing \(c^Q=1\) per-hour quadratic penalty.
+This is a convex quadratic objective, but overlapping windows couple adjacent hours, so the
+problem no longer decomposes into independent hourly decisions. The run saves the optimal
+schedule against the reference profile and reports its total disutility.
 
 **Use it from a notebook or your own script** (run from the repository root):
 ```python
@@ -178,6 +188,7 @@ does every conversion for you and exposes physical quantities:
 | Question 1, case B: a more expensive PV, c_PV > u | `Q1_caseB` | `PV_01_B` + `FL_01` (`PV_01_B` differs from `PV_01_A` only in `marginal_cost_DKK_per_kWh`) |
 | Question 2 - linear disutility of deviating from a reference profile | `Q2_linear` | `PV_01_A` + `FL_02_L` (reference profile, `linear_disutility_DKK_per_kWh`; same hourly bounds as Question 1; no utility) |
 | Question 2 - quadratic disutility | `Q2_quadratic` | `PV_01_A` + `FL_02_Q` (as `FL_02_L` with `quadratic_disutility_DKK_per_kWh2` instead) |
+| Question 2(e) - rolling temporal disutility | `Q2_temporal` | `PV_01_A` + `FL_02_W` (three-hour rolling quadratic penalty) |
 | Question 3 - minimum daily energy requirement | `Q3` | `PV_01_A` + `FL_03` (as `FL_02_Q` plus `min_total_energy_per_day_kWh`, the E_min of the daily requirement) |
 | Question 3.(g) - the same consumer with a small battery | `Q3_battery` | `PV_01_A` + `FL_03` + `BAT_01` |
 
@@ -191,7 +202,7 @@ justifying them) is part of that question - start from the `Q2_quadratic` case a
 
 `appliance_params.json` - the shared catalogue, one list per appliance type (`null` if none)
 : **DERs**: `DER_id`, `DER_type` (`"PV"`), `max_power_kW` (peak power, kW), `marginal_cost_DKK_per_kWh` (cost of every kWh produced), `hourly_profile_ratio` (dimensionless fraction of `max_power_kW` available each hour; available energy in kWh/h = `max_power_kW` x ratio), `hourly_profile_ratio_next_day` (see *Next-day forecasts* below)
-: **loads**: `load_id`, `load_type`, `max_load_KWh_per_hour` and `min_load_KWh_per_hour` (hourly consumption bounds, kWh/h), `consumption_utility_DKK_per_kWh` (value of every kWh consumed, Question 1), `linear_disutility_DKK_per_kWh` and `quadratic_disutility_DKK_per_kWh2` (Questions 2-3), `min_total_energy_per_day_kWh` (the E_min of Question 3), `reference_load_capacity_factor` (dimensionless fraction of `max_load_KWh_per_hour`; preferred consumption in kWh/h = max load x factor), `reference_hourly_profile_ratio_next_day` (see *Next-day forecasts*). Fields a load does not use are `null`. The hourly bounds are the same for every load: deviations from the reference are limited only by them.
+: **loads**: `load_id`, `load_type`, `max_load_KWh_per_hour` and `min_load_KWh_per_hour` (hourly consumption bounds, kWh/h), `consumption_utility_DKK_per_kWh` (value of every kWh consumed, Question 1), `linear_disutility_DKK_per_kWh`, `quadratic_disutility_DKK_per_kWh2`, `rolling_disutility_DKK_per_kWh2` and `rolling_window_hours` (Questions 2-3), `min_total_energy_per_day_kWh` (the E_min of Question 3), `reference_load_capacity_factor` (dimensionless fraction of `max_load_KWh_per_hour`; preferred consumption in kWh/h = max load x factor), `reference_hourly_profile_ratio_next_day` (see *Next-day forecasts*). Fields a load does not use are `null`. The hourly bounds are the same for every load: deviations from the reference are limited only by them.
 : **storages**: `storage_id`, `storage_type` (`"battery"`), `storage_capacity_kWh`, `max_charging_power_kW`, `max_discharging_power_kW`, `charging_efficiency` and `discharging_efficiency` (fraction of the energy transferred that survives each conversion - a full round trip keeps η_ch·η_dis), `initial_state_of_charge_ratio` (fraction of `storage_capacity_kWh` in the battery at the start of the day). **No final state of charge is given on purpose**: how to treat the battery's state of charge at the end of the day (constraint or objective) is your modeling choice in Question 3.(g).
 : **heat_pumps**: not used in Assignment 1 (`null`)
 
