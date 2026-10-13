@@ -259,3 +259,32 @@ def plot_deviation_profiles(runs: dict, label: str, values: list | None = None,
     ax1.legend(fontsize=8, ncol=3)
     ax2.set(xlabel="hour", ylabel="energy price $p_t$ [DKK/kWh]")
     return _finish(fig, save_to)
+
+def plot_battery_value(df, xlabel: str, save_to: Path | str | None = None) -> plt.Figure:
+    """Value of the battery (DKK/day) against a swept parameter, with the discharged energy
+    (kWh/day) on a second axis."""
+    x = df.index.to_numpy(dtype=float)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(x, df["value"], "o-", color="C0", label="battery value")
+    ax.set(xlabel=xlabel, ylabel="value of the battery [DKK/day]")
+    ax2 = ax.twinx()
+    ax2.plot(x, df["throughput"], "s--", color="C1", label="discharged energy")
+    ax2.set_ylabel("discharged energy [kWh/day]", color="C1")
+    l1, b1 = ax.get_legend_handles_labels()
+    l2, b2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, b1 + b2, fontsize=8, loc="upper left")
+    return _finish(fig, save_to)
+
+def plot_battery_value_grid(dfs: dict, labels: dict, save_to: Path | str | None = None) -> plt.Figure:
+    """Value of the battery (DKK/day) for several one-at-a-time sweeps, one panel per parameter,
+    with a shared y-axis. ``dfs`` maps sweep name -> DataFrame (index = parameter value, column
+    'value'), ``labels`` maps sweep name -> x-axis label. The base case is marked in each panel."""
+    names = list(dfs)
+    fig, axes = plt.subplots(1, len(names), figsize=(3.2 * len(names), 3.4), sharey=True)
+    for ax, name in zip(np.atleast_1d(axes), names):
+        df = dfs[name]
+        ax.plot(df.index.to_numpy(dtype=float), df["value"], "o-", color="C0")
+        ax.set(xlabel=labels[name])
+        ax.grid(alpha=0.3)
+    np.atleast_1d(axes)[0].set_ylabel("value of the battery [DKK/day]")
+    return _finish(fig, save_to)

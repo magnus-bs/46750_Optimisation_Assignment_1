@@ -17,8 +17,8 @@ import pandas as pd
 
 from src.data_loader import load_question, list_questions
 from src.model import FlexibleConsumerModel, LinearDisutilityModel, QuadraticDisutilityModel, MinEnergyModel, BatteryModel, Results
-from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison, plot_battery, plot_sweep, plot_load_profiles, plot_deviation_profiles
-from src.scenarios import scale_prices, scale_pv, set_tariffs, set_disutility, set_load_preferences
+from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison, plot_battery, plot_sweep, plot_load_profiles, plot_deviation_profiles, plot_battery_value, plot_battery_value_grid
+from src.scenarios import scale_prices, scale_pv, set_tariffs, set_disutility, set_load_preferences, shift_prices, set_battery
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -140,10 +140,8 @@ def run_q3_sensitivity(out: Path) -> None:
         df, runs = run_sweep(base, modify, values, name, out)
         print(f"\n--- sweep over {name} ---\n{df.round(2).to_string()}")
         vlines = {"Σ load 2.(c)": sum_2c, "Σ reference": sum_ref} if name == "Emin" else None
-        plot_sweep(df, label, save_to=out / "sensitivity" / f"sweep_{name}.png",
-                   log_x=(name == "cQ"), vlines=vlines)
-        plot_load_profiles(runs, base, label, values=shown,
-                           save_to=out / "sensitivity" / f"loads_{name}.png"),
+        plot_sweep(df, label, save_to=out / "sensitivity" / f"sweep_{name}.png", log_x=(name == "cQ"), vlines=vlines)
+        plot_load_profiles(runs, base, label, values=shown, save_to=out / "sensitivity" / f"loads_{name}.png")
         plot_deviation_profiles(runs, label, values=shown, save_to=out / "sensitivity" / f"deviation_{name}.png")
 
 def run_battery_comparison(out: Path) -> None:
@@ -161,6 +159,53 @@ def run_battery_comparison(out: Path) -> None:
     print(f"mu_E with / without battery  : {-res_bat.duals['min_energy']:.3f} / "
           f"{-res_nobat.duals['min_energy']:.3f} DKK/kWh")
     plot_battery(res_bat, data, save_to=out / "battery.png")
+
+def run_battery_sensitivity(out: Path) -> None:
+    """Question 3.(g).v: value of the battery (DKK/day) for one-at-a-time sweeps of the price
+    spread (environment) and of the battery capacity and efficiency (technology).
+
+    Value = total cost without battery - total cost with battery, on the same scenario data.
+    """
+    base = load_question("Q3_battery")
+    folder = out / "sensitivity"
+    sweeps = {
+        "spread": (lambda d, v: scale_prices(d, v, keep_mean=True),
+                [0.0, 0.5, 1.0, 1.5, 2.0], "price spread factor"),
+        "level": (lambda d, v: shift_prices(d, v),
+                [-0.4, -0.2, 0.0, 0.2, 0.4], "price level shift [DKK/kWh]"),
+        "capacity": (lambda d, v: set_battery(d, capacity_kWh=v),
+                [1.0, 2.0, 4.0, 8.0, 16.0], "battery capacity [kWh]"),
+        "efficiency": (lambda d, v: set_battery(d, efficiency=v),
+                [0.80, 0.85, 0.90, 0.95, 1.00], "charging = discharging efficiency [-]"),
+        "power": (lambda d, v: set_battery(d, max_power_kW=v), 
+                [0.5, 1, 1.5, 2, 2.5], "power limit [kW]"),
+        "capacity_power": (lambda d, v: set_battery(d, capacity_kWh=v, max_power_kW=0.375 * v),
+                           [1.0, 2.0, 4.0, 8.0, 16.0], "capacity [kWh] (power = 0.375 x capacity)"),
+    }
+    dfs, labels = {}, {}
+    for name, (modify, values, label) in sweeps.items():
+        rows = []
+        for v in values:
+            data = modify(base, v)
+            res_bat = BatteryModel(data).build().solve()
+            res_no = MinEnergyModel(data).build().solve()      # same data, ignores the battery
+            res_bat.save(folder / name, tag=f"{name}_{v}")
+            rows.append({
+                name: v,
+                "value": res_no.objective - res_bat.objective,
+                "procurement_change": res_bat.procurement_cost - res_no.procurement_cost,
+                "disutility_change": res_no.utility - res_bat.utility,
+                "throughput": res_bat.hourly["discharge"].sum(),
+                "cycles": res_bat.hourly["discharge"].sum() / data.battery_capacity_kWh,
+                "mu_E_with": -res_bat.duals["min_energy"],
+                "mu_E_without": -res_no.duals["min_energy"],
+                "max_overlap": res_bat.meta["max_overlap_kWh"],
+            })
+        df = pd.DataFrame(rows).set_index(name)
+        df.to_csv(folder / f"battery_sweep_{name}.csv")
+        print(f"\n--- battery value, sweep over {name} ---\n{df.round(3).to_string()}")
+        dfs[name], labels[name] = df, label
+    plot_battery_value_grid(dfs, labels, save_to=folder / f"battery_value_all.png")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -182,6 +227,8 @@ def main() -> None:
     if args.scenarios and base is not None:
         if args.question == "Q3":
             run_q3_sensitivity(out)
+        elif args.question == "Q3_battery":
+            run_battery_sensitivity(out)
         else:
             run_scenarios(args.question, out)
     print(f"\nOutputs written to {out}")
