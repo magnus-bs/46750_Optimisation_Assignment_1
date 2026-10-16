@@ -154,17 +154,25 @@ class FlexibleConsumerModel:
                 d.quadratic_disutility * (l[t] - d.reference_load[t]) ** 2
                 for t in T
             )
-        if d.rolling_disutility is not None and d.reference_load is not None: # Question 2.e ii) 
+        if d.rolling_disutility is not None and d.reference_load is not None:  # Question 2.e
             if d.rolling_window_hours is None:
                 raise ValueError("rolling_window_hours is required for rolling disutility")
+            if "dev_plus" not in self.var:          # same auxiliary variables as the linear case
+                self.var["dev_plus"] = m.addVars(T, lb=0, name="dev_plus")
+                self.var["dev_minus"] = m.addVars(T, lb=0, name="dev_minus")
+                self.con["deviation"] = m.addConstrs(
+                    (l[t] - d.reference_load[t] == self.var["dev_plus"][t] - self.var["dev_minus"][t] for t in T),
+                    name="deviation",
+                )
+            dp, dm = self.var["dev_plus"], self.var["dev_minus"]
+            w = d.rolling_window_hours
             objective += gp.quicksum(
                 d.rolling_disutility
-                * gp.quicksum(
-                    l[j] - d.reference_load[j]
-                    for j in range(max(0, t - d.rolling_window_hours + 1), t + 1)
-                ) ** 2
+                * gp.quicksum(dp[j] + dm[j] for j in range(max(0, t - w + 1), t + 1)) ** 2
                 for t in T
             )
+
+        
         m.setObjective(objective, GRB.MINIMIZE)
 
         # --- Constraints -------------------------------------------------------------
@@ -262,13 +270,11 @@ class FlexibleConsumerModel:
         if d.rolling_disutility is not None and d.reference_load is not None:
             if d.rolling_window_hours is None:
                 raise ValueError("rolling_window_hours is required for rolling disutility")
+            w = d.rolling_window_hours
+            dev = [abs(l[j].X - d.reference_load[j]) for j in T]
             disutility += sum(
-                d.rolling_disutility
-                * sum(
-                    l[j].X - d.reference_load[j]
-                    for j in range(max(0, t - d.rolling_window_hours + 1), t + 1)
-                ) ** 2
-                for t in T
+                d.rolling_disutility * sum(dev[j] for j in range(max(0, t - w + 1), t + 1)) ** 2
+            for t in T
             )
         assert abs((procurement_cost - utility + disutility) - self.m.ObjVal) < 1e-6, \
             "procurement_cost - utility + disutility should equal the objective value"

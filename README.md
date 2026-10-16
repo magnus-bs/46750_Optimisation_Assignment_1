@@ -90,6 +90,7 @@ python main.py --question Q1_caseA              # base case
 python main.py --question Q2_linear             # base case + cL sensitivity plot/table
 python main.py --question Q2_quadratic          # base case + cQ sensitivity plot/table
 python main.py --question Q2_temporal           # rolling-window disutility (Question 2.e)
+python main.py --temporal-experiment            # alternating-vs-block prices for all Q2 models
 python main.py --question Q1_caseA --scenarios  # + example sensitivity scenarios
 python main.py --show                           # open the figures in a window
 ```
@@ -114,6 +115,21 @@ accumulated deviation to roughly match the existing \(c^Q=1\) per-hour quadratic
 This is a convex quadratic objective, but overlapping windows couple adjacent hours, so the
 problem no longer decomposes into independent hourly decisions. The run saves the optimal
 schedule against the reference profile and reports its total disutility.
+
+The temporal-structure experiment uses the exact same 24 observed hourly prices in both
+profiles: the lower and upper halves of the sorted values are interleaved for the alternating
+profile and grouped into consecutive blocks for the block profile. It solves the linear,
+quadratic, and rolling-window models for all 24 cyclic rotations of each profile. Thus the
+profiles have identical price distributions, and every time-of-day hour receives the same
+set of prices across rotations, balancing their alignment with the fixed PV and reference-load
+profiles. Run `python main.py --temporal-experiment` to save the summary and all rotation-level
+results as CSV files and a comparison figure in `results/Q2_temporal/`.
+
+Generalized surplus is reported as the negative optimized objective, i.e. minus procurement
+cost and the model's disutility. The chosen penalty coefficients are retained from the three
+Q2 cases; because they represent different preference functions and have different units,
+generalized surplus is most directly compared between price profiles within each model.
+Procurement cost and total absolute deviation are also reported for cross-model comparison.
 
 **Use it from a notebook or your own script** (run from the repository root):
 ```python

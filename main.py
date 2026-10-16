@@ -286,8 +286,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--question", default="Q1_caseA", choices=list_questions(), help="data case to use")
     parser.add_argument("--scenarios", action="store_true", help="also run the example sensitivity scenarios")
+    parser.add_argument(
+        "--temporal-experiment",
+        action="store_true",
+        help="compare alternating and block price profiles across the Q2 disutility models",
+    )
     parser.add_argument("--show", action="store_true", help="open the figures in a window")
     args = parser.parse_args()
+
+    if args.temporal_experiment:
+        if not args.show:
+            matplotlib.use("Agg")
+        from src.temporal_experiment import run_temporal_structure_experiment
+
+        out = RESULTS_DIR / "Q2_temporal"
+        run_temporal_structure_experiment(out, show=args.show)
+        return
 
     out = RESULTS_DIR / args.question
     out.mkdir(parents=True, exist_ok=True)
