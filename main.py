@@ -17,7 +17,7 @@ import pandas as pd
 
 from src.data_loader import load_question, list_questions
 from src.model import FlexibleConsumerModel, LinearDisutilityModel, QuadraticDisutilityModel, MinEnergyModel, BatteryModel, Results
-from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison, plot_battery, plot_sweep, plot_load_profiles, plot_deviation_profiles, plot_battery_value, plot_battery_value_grid
+from src.plotting import plot_duals, plot_inputs, plot_scenario_comparison, plot_schedule, plot_min_energy_comparison, plot_battery, plot_sweep, plot_load_profiles, plot_deviation_profiles, plot_battery_value, plot_battery_value_grid, plot_marginal_prices, plot_schedule_with_prices
 from src.scenarios import scale_prices, scale_pv, set_tariffs, set_disutility, set_load_preferences, shift_prices, set_battery
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -83,7 +83,7 @@ def run_q3_comparison(out: Path) -> None:
     res_2c = QuadraticDisutilityModel(data).build().solve()   # ignores E_min
     res_3.save(out, tag="with_Emin")
     res_2c.save(out, tag="without_Emin")
-    plot_schedule(res_3, data, save_to=out / "schedule_q3_vs_2c.png", compare=res_2c)
+    plot_schedule_with_prices(res_3, data, save_to=out / "schedule_price_q3.png", compare=res_2c)
 
 def summarize(res: Results, data) -> dict:
     """Daily metrics of one run: mu^E (DKK/kWh), costs (DKK), energy and deviation (kWh), hour counts."""
@@ -169,18 +169,13 @@ def run_battery_sensitivity(out: Path) -> None:
     base = load_question("Q3_battery")
     folder = out / "sensitivity"
     sweeps = {
-        "spread": (lambda d, v: scale_prices(d, v, keep_mean=True),
-                [0.0, 0.5, 1.0, 1.5, 2.0], "price spread factor"),
-        "level": (lambda d, v: shift_prices(d, v),
-                [-0.4, -0.2, 0.0, 0.2, 0.4], "price level shift [DKK/kWh]"),
+        #"spread": (lambda d, v: scale_prices(d, v, keep_mean=True), [0.0, 0.5, 1.0, 1.5, 2.0], "price spread factor"),
+        #"level": (lambda d, v: shift_prices(d, v), [-0.4, -0.2, 0.0, 0.2, 0.4], "price level shift [DKK/kWh]"),
         "capacity": (lambda d, v: set_battery(d, capacity_kWh=v),
                 [1.0, 2.0, 4.0, 8.0, 16.0], "battery capacity [kWh]"),
-        "efficiency": (lambda d, v: set_battery(d, efficiency=v),
-                [0.80, 0.85, 0.90, 0.95, 1.00], "charging = discharging efficiency [-]"),
-        "power": (lambda d, v: set_battery(d, max_power_kW=v), 
-                [0.5, 1, 1.5, 2, 2.5], "power limit [kW]"),
-        "capacity_power": (lambda d, v: set_battery(d, capacity_kWh=v, max_power_kW=0.375 * v),
-                           [1.0, 2.0, 4.0, 8.0, 16.0], "capacity [kWh] (power = 0.375 x capacity)"),
+        #"efficiency": (lambda d, v: set_battery(d, efficiency=v), [0.80, 0.85, 0.90, 0.95, 1.00], "charging = discharging efficiency [-]"),
+        "power": (lambda d, v: set_battery(d, max_power_kW=v), [0.5, 1, 1.5, 2, 2.5], "power limit [kW]"),
+        "capacity_power": (lambda d, v: set_battery(d, capacity_kWh=v, max_power_kW=0.375 * v), [1.0, 2.0, 4.0, 8.0, 16.0], "capacity [kWh] (power = 0.375 x capacity)"),
     }
     dfs, labels = {}, {}
     for name, (modify, values, label) in sweeps.items():

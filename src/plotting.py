@@ -147,6 +147,75 @@ def plot_min_energy_comparison(res_3: Results, res_2c: Results, data: InputData,
     ax2.legend(l1 + l2, b1 + b2, fontsize=8, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.25))
     return _finish(fig, save_to)
 
+def plot_marginal_prices(results: Results, data: InputData, save_to: Path | str | None = None) -> plt.Figure:
+    """Question 3.(e): marginal value of energy lambda_t per hour against the multiplier mu^E of the
+    minimum-energy requirement (DKK/kWh), with the effective import/export prices and C^PV for reference.
+
+    Gurobi reports d(objective)/d(rhs), so lambda_t = -Pi of the balance and mu^E = -Pi of min_energy.
+    Hours with lambda_t < mu^E are shaded: there the load lies above the reference.
+    """
+    hr = results.hourly
+    h = hr.index.to_numpy()
+    lam = -hr["dual_balance"].to_numpy()
+    mu_E = -results.duals["min_energy"]
+
+    fig, ax = plt.subplots(figsize=(11, 4))
+    ax.step(h, data.energy_price + data.import_tariff, where="mid", color="grey", ls="--", lw=1,
+            label="effective import price $P_t^{imp}$")
+    ax.step(h, data.energy_price - data.export_tariff, where="mid", color="grey", ls=":", lw=1,
+            label="effective export price $P_t^{exp}$")
+    #ax.axhline(data.pv_marginal_cost, color="orange", ls=":", lw=1.2, label="$C^{PV}$")
+    ax.step(h, lam, where="mid", color="C0", lw=2, label="$\\lambda_t$")
+    ax.axhline(mu_E, color="C3", ls="--", lw=1.5, label=f"$\\mu^E$ = {mu_E:.2f}")
+    #ax.fill_between(h, lam, mu_E, where=lam < mu_E, step="mid", color="C2", alpha=0.2,label="$\\lambda_t < \\mu^E$ (load above reference)")
+    ax.set(xlabel="hour", ylabel="DKK/kWh",
+           title=f"Marginal value of energy and of the minimum-energy requirement - {results.question}")
+    ax.legend(fontsize=8, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.18))
+    return _finish(fig, save_to)
+
+def plot_schedule_with_prices(results: Results, data: InputData, save_to: Path | str | None = None,
+                              compare: Results | None = None, compare_label: str = "load 2.c") -> plt.Figure:
+    """Question 3.(e): optimal schedule (top) and lambda_t with mu^E (bottom) in one figure with a
+    shared hour axis. Same content as plot_schedule and plot_marginal_prices.
+    Gurobi reports d(objective)/d(rhs), so lambda_t = -Pi of the balance and mu^E = -Pi of min_energy."""
+    hr = results.hourly
+    h = hr.index.to_numpy()
+    fig, (ax, ax3) = plt.subplots(2, 1, figsize=(11, 8.5), sharex=True,
+                                  gridspec_kw={"height_ratios": [3, 2]})
+
+    # --- top: schedule (as plot_schedule)
+    width = 0.8
+    ax.bar(h, hr["load"], width, color="C0", alpha=0.7, label="load")
+    ax.bar(h, -hr["pv"], width, color="orange", alpha=0.7, label="PV used (negative = generation)")
+    ax.step(h, -hr["pv_available"], where="mid", color="orange", ls="--", lw=1, label="PV available")
+    ax.plot(h, hr["import"] - hr["export"], "k.-", label="net import (+) / export (-)")
+    if compare is not None:
+        ax.step(h, compare.hourly["load"], where="mid", color="green", ls="--", lw=1.5, label=compare_label)
+    ax.step(h, hr["reference_load"], where="mid", color="C0", ls=":", label="reference load")
+    ax.axhline(0, color="grey", lw=0.8)
+    ax.set(ylabel="kWh/h", title=f"Optimal schedule - {results.question} (cost {results.objective:.1f} DKK)")
+
+    ax2 = ax.twinx()
+    ax2.step(h, hr["price"], where="mid", color="C3", lw=1.2, label="energy price")
+    ax2.set_ylabel("DKK/kWh", color="C3")
+    lines, labels = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(lines + l2, labels + lb2, fontsize=8, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.06))
+
+    # --- bottom: marginal prices (as plot_marginal_prices)
+    lam = -hr["dual_balance"].to_numpy()
+    mu_E = -results.duals["min_energy"]
+    ax3.step(h, data.energy_price + data.import_tariff, where="mid", color="grey", ls="--", lw=1,
+             label="effective import price $P_t^{imp}$")
+    ax3.step(h, data.energy_price - data.export_tariff, where="mid", color="grey", ls=":", lw=1,
+             label="effective export price $P_t^{exp}$")
+    ax3.step(h, lam, where="mid", color="C0", lw=2, label="$\\lambda_t$")
+    ax3.axhline(mu_E, color="C3", ls="--", lw=1.5, label=f"$\\mu^E$ = {mu_E:.2f}")
+    ax3.set(xlabel="hour", ylabel="DKK/kWh",
+            title=f"Marginal value of energy and of the minimum-energy requirement - {results.question}")
+    ax3.legend(fontsize=8, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.18))
+    return _finish(fig, save_to)
+
 def plot_sweep(df, xlabel: str, save_to: Path | str | None = None, log_x: bool = False,
                vlines: dict[str, float] | None = None) -> plt.Figure:
     """Daily metrics against a swept parameter (one row of ``df`` per value).
