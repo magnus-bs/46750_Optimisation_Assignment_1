@@ -12,6 +12,8 @@ be chained::
 
 Add your own helpers here (e.g. shifting the price peak towards the PV peak, changing the
 minimum daily energy or the reference profile) and document them in the README.
+Helpers added for Question 3: ``set_disutility`` (c^Q / c^L, Question 3.(f)) and ``set_battery``
+(capacity, power limit and efficiency, Question 3.(g).v).
 """
 from __future__ import annotations
 

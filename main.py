@@ -1,9 +1,14 @@
 """Entry point: load one question's data, build and solve the model, save results and figures.
 
-    python main.py                          # base case of Q1_caseA
-    python main.py --question Q2_linear     # another case
-    python main.py --scenarios              # also run the example sensitivity scenarios
-
+    python main.py --question Q1_caseA                  # Question 1, case A (also Q1_caseB)
+    python main.py --question Q2_linear                 # Question 2.(b) incl. c^L scenarios
+    python main.py --question Q2_quadratic              # Question 2.(c) incl. c^Q scenarios
+    python main.py --temporal-experiment                # Question 2.(e).iv
+    python main.py --question Q3                        # Question 3.(e): with/without E_min
+    python main.py --question Q3 --scenarios            # Question 3.(f): sensitivity analysis
+    python main.py --question Q3_battery                # Question 3.(g).iv: with/without battery
+    python main.py --question Q3_battery --scenarios    # Question 3.(g).v and Appendix B
+    
 Results (CSV, TXT, PNG) are written to ``results/<question>/``. Extend ``run_scenarios``
 with your own scenarios, or add a new function per question, as your analysis grows.
 """

@@ -1,0 +1,4 @@
+status    : OPTIMAL
+objective : 62.8170 DKK
+dual[min_energy] : -2.3492
+dual[soc_end] : 1.7850
