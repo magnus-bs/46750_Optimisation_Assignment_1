@@ -207,6 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 # Assignment-specific
-.DS_Store
-results/*
-!results/.gitkeep
+#.DS_Store
+#results/*
+# !results/.gitkeep

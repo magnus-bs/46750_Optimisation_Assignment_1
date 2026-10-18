@@ -69,6 +69,8 @@ class InputData:
                                           # = load_max_kWh * reference_load_capacity_factor
     linear_disutility: float | None       # DKK per kWh of absolute deviation from reference_load
     quadratic_disutility: float | None    # DKK per kWh^2 of deviation from reference_load
+    rolling_disutility: float | None      # DKK per kWh^2 of rolling accumulated deviation
+    rolling_window_hours: int | None      # number of consecutive hourly deviations in the rolling window
 
     # Battery (Q3_battery only; from the "storages" catalogue; all None when absent)
     battery_capacity_kWh: float | None = None
@@ -108,6 +110,7 @@ class InputData:
             f"Min daily energy     : {self.min_daily_energy_kWh}",
             f"Reference profile    : {'yes (%.1f kWh/day)' % self.reference_load.sum() if self.reference_load is not None else 'no'}",
             f"Disutility lin/quad  : {self.linear_disutility} / {self.quadratic_disutility}",
+            f"Rolling disutility   : {self.rolling_disutility} over {self.rolling_window_hours} hours",
             f"Battery              : "
             + (f"{self.battery_capacity_kWh:.1f} kWh, {self.battery_max_charge_kW:.1f}/"
                f"{self.battery_max_discharge_kW:.1f} kW, eta {self.battery_charging_efficiency:.2f}/"
@@ -186,6 +189,14 @@ def load_question(question: str, data_dir: Path | str = DATA_DIR, consumer_index
         v = d.get(key)
         return None if v is None else float(v)
 
+    def opt_positive_int(d: dict, key: str) -> int | None:
+        value = d.get(key)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{key} must be a positive integer")
+        return value
+
     # --- PV (the consumer's DER of type PV in the catalogue)
     ders = catalogue.get("DERs") or []
     pv = next((d for d in ders if d["DER_id"] in appliance_ids and d["DER_type"] == "PV"), None)
@@ -237,6 +248,16 @@ def load_question(question: str, data_dir: Path | str = DATA_DIR, consumer_index
             else load_max * _as_array(nd_ref, "reference_hourly_profile_ratio_next_day"),
     )
 
+    rolling_disutility = opt_float(load, "rolling_disutility_DKK_per_kWh2")
+    rolling_window_hours = opt_positive_int(load, "rolling_window_hours")
+    if rolling_disutility is not None:
+        if rolling_disutility <= 0:
+            raise ValueError("rolling_disutility_DKK_per_kWh2 must be positive")
+        if rolling_window_hours is None:
+            raise ValueError("rolling_window_hours is required when rolling disutility is set")
+        if reference_load is None:
+            raise ValueError("rolling disutility requires a reference load profile")
+
     return InputData(
         question=case,
         consumer_id=cid,
@@ -257,6 +278,8 @@ def load_question(question: str, data_dir: Path | str = DATA_DIR, consumer_index
         reference_load=reference_load,
         linear_disutility=opt_float(load, "linear_disutility_DKK_per_kWh"),
         quadratic_disutility=opt_float(load, "quadratic_disutility_DKK_per_kWh2"),
+        rolling_disutility=rolling_disutility,
+        rolling_window_hours=rolling_window_hours,
         **bat_kwargs,
         **nd_kwargs,
         raw=raw,

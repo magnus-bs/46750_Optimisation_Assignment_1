@@ -1,0 +1,4 @@
+scenario,cL_DKK_per_kWh,procurement_cost_DKK,total_disutility_DKK,daily_energy_kWh,total_absolute_deviation_kWh,deviation_bound_hours
+base,1.43,31.100999999999996,13.213199999999997,23.1,9.239999999999998,1
+low_penalty,1.4,-1.470000000000001,45.27599999999999,0.0,32.339999999999996,14
+high_penalty,2.4,48.215999999999994,0.0,32.339999999999996,0.0,0

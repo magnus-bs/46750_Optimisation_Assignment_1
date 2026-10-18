@@ -40,6 +40,9 @@ class Results:
     question: str
     status: str
     objective: float
+    procurement_cost: float             
+    utility: float   
+    disutility: float
     hourly: pd.DataFrame                   # one row per hour: variables, prices, hourly duals
     duals: dict[str, float] = field(default_factory=dict)   # duals of non-hourly constraints
     meta: dict = field(default_factory=dict)                 # anything else worth keeping (scenario name, ...)
@@ -59,6 +62,8 @@ class Results:
         cols = [c for c in self.hourly.columns if not c.startswith("dual_")]
         return (
             f"status: {self.status} | objective: {self.objective:.2f} DKK\n"
+            f"procurement cost: {self.procurement_cost:.2f} DKK\n"
+            f"utility: {self.utility:.2f} DKK | disutility: {self.disutility:.2f} DKK\n"
             f"daily totals (kWh): " + ", ".join(f"{c}={self.hourly[c].sum():.1f}" for c in cols if c in ("import", "export", "load", "pv"))
             + (f"\nduals: {self.duals}" if self.duals else "")
         )
@@ -109,10 +114,66 @@ class FlexibleConsumerModel:
         # * naming the families "import", "export", "load", "pv" makes the standard plots of
         #   src/plotting.py work out of the box.
 
+        self.var["load"]   = m.addVars(T,  lb=-GRB.INFINITY, name="load")     # l_t^L
+        self.var["pv"]     = m.addVars(T,  lb=-GRB.INFINITY, name="pv")        # g_t^PV
+        self.var["import"] = m.addVars(T, lb=-GRB.INFINITY, name="import")    # x_t^imp
+        self.var["export"] = m.addVars(T, lb=-GRB.INFINITY, name="export")    # x_t^exp
+
+        l   = self.var["load"]
+        g   = self.var["pv"]
+        xi  = self.var["import"]
+        xe  = self.var["export"]
+
+        P_imp = {t: d.energy_price[t] + d.import_tariff for t in T}
+        P_exp = {t: d.energy_price[t] - d.export_tariff for t in T}
+
+
         # --- Objective ---------------------------------------------------------------
-        # TODO: express the objective function and its direction (GRB.MINIMIZE or GRB.MAXIMIZE):
-        #   m.setObjective(gp.quicksum(<expression in t> for t in T), <direction>)
-        # The input-data attributes (with units) are documented in src/data_loader.py (InputData).
+        # Question 1: utility enters as a benefit term, so the objective is cost minus utility.
+        # Question 2(b): linear disutility of deviation from a reference profile.
+        # Question 2(c): quadratic disutility of deviation from a reference profile.
+        # Question 2(e): quadratic disutility of rolling accumulated deviations.
+        objective = gp.quicksum(
+            d.pv_marginal_cost * g[t] + P_imp[t] * xi[t] - P_exp[t] * xe[t] for t in T
+        )
+        if d.consumption_utility is not None:
+            objective -= gp.quicksum(d.consumption_utility * l[t] for t in T)
+        if d.linear_disutility is not None and d.reference_load is not None: # Question 2.b iii) + iv)
+            self.var["dev_plus"] = m.addVars(T, lb=0, name="dev_plus")
+            self.var["dev_minus"] = m.addVars(T, lb=0, name="dev_minus")
+            self.con["deviation"] = m.addConstrs(
+                (l[t] - d.reference_load[t] == self.var["dev_plus"][t] - self.var["dev_minus"][t] for t in T),
+                name="deviation",
+            )
+            objective += gp.quicksum(
+                d.linear_disutility * (self.var["dev_plus"][t] + self.var["dev_minus"][t])
+                for t in T
+            )
+        if d.quadratic_disutility is not None and d.reference_load is not None: # Question 2.c iii) + iv)
+            objective += gp.quicksum(
+                d.quadratic_disutility * (l[t] - d.reference_load[t]) ** 2
+                for t in T
+            )
+        if d.rolling_disutility is not None and d.reference_load is not None:  # Question 2.e
+            if d.rolling_window_hours is None:
+                raise ValueError("rolling_window_hours is required for rolling disutility")
+            if "dev_plus" not in self.var:          # same auxiliary variables as the linear case
+                self.var["dev_plus"] = m.addVars(T, lb=0, name="dev_plus")
+                self.var["dev_minus"] = m.addVars(T, lb=0, name="dev_minus")
+                self.con["deviation"] = m.addConstrs(
+                    (l[t] - d.reference_load[t] == self.var["dev_plus"][t] - self.var["dev_minus"][t] for t in T),
+                    name="deviation",
+                )
+            dp, dm = self.var["dev_plus"], self.var["dev_minus"]
+            w = d.rolling_window_hours
+            objective += gp.quicksum(
+                d.rolling_disutility
+                * gp.quicksum(dp[j] + dm[j] for j in range(max(0, t - w + 1), t + 1)) ** 2
+                for t in T
+            )
+
+        
+        m.setObjective(objective, GRB.MINIMIZE)
 
         # --- Constraints -------------------------------------------------------------
         # TODO: add the constraints of your formulation.
@@ -122,6 +183,31 @@ class FlexibleConsumerModel:
         #       (<lhs expression> - <rhs expression> <= 0 for t in T), name="<name>")
         # Pattern for a single constraint (dual returned as a scalar):
         #   self.con["<name>"] = m.addConstr(<lhs expression> - <rhs expression> <= 0, name="<name>")
+        self.con["balance"] = m.addConstrs(
+            (l[t] + xe[t] - g[t] - xi[t] == 0 for t in T), name="balance")
+
+        # (1b) L^min - l_t^L <= 0  -> dual mu_t^
+        self.con["load_min"] = m.addConstrs(
+            (d.load_min_kWh - l[t] <= 0 for t in T), name="load_min")
+
+        # (1c) l_t^L - L^max <= 0  -> dual mu_bar_t^L  <-- this is the one you report in (c)
+        self.con["load_max"] = m.addConstrs(
+            (l[t] - d.load_max_kWh <= 0 for t in T), name="load_max")
+
+        # (1d) -g_t^PV <= 0
+        self.con["pv_min"] = m.addConstrs(
+            (-g[t] <= 0 for t in T), name="pv_min")
+
+        # (1e) g_t^PV - PV_t^max <= 0
+        
+        self.con["pv_max"] = m.addConstrs(
+            (g[t] - d.pv_available[t] <= 0 for t in T), name="pv_max")
+
+        # (1f), (1g): non-negativity of import/export as explicit constraints (only needed
+        # if you want their duals too — otherwise the default lb=0 above already enforces them)
+        self.con["import_nonneg"] = m.addConstrs((-xi[t] <= 0 for t in T), name="import_nonneg")
+        self.con["export_nonneg"] = m.addConstrs((-xe[t] <= 0 for t in T), name="export_nonneg")
+
 
         m.update()
         return self
@@ -167,11 +253,39 @@ class FlexibleConsumerModel:
             except (AttributeError, gp.GurobiError):
                 # No duals available (e.g. model with integer variables)
                 pass
+          # --- procurement cost and utility, split out of the objective ---------
+        g, xi, xe, l = self.var["pv"], self.var["import"], self.var["export"], self.var["load"]
+        P_imp = {t: d.energy_price[t] + d.import_tariff for t in T}
+        P_exp = {t: d.energy_price[t] - d.export_tariff for t in T}
+        procurement_cost = sum(d.pv_marginal_cost * g[t].X + P_imp[t] * xi[t].X - P_exp[t] * xe[t].X for t in T)
+        utility = sum(d.consumption_utility * l[t].X for t in T) if d.consumption_utility is not None else 0.0
+        disutility = 0.0
+        if d.linear_disutility is not None and d.reference_load is not None:
+            disutility = sum(d.linear_disutility * abs(l[t].X - d.reference_load[t]) for t in T)
+        if d.quadratic_disutility is not None and d.reference_load is not None:
+            disutility += sum(
+                d.quadratic_disutility * (l[t].X - d.reference_load[t]) ** 2
+                for t in T
+            )
+        if d.rolling_disutility is not None and d.reference_load is not None:
+            if d.rolling_window_hours is None:
+                raise ValueError("rolling_window_hours is required for rolling disutility")
+            w = d.rolling_window_hours
+            dev = [abs(l[j].X - d.reference_load[j]) for j in T]
+            disutility += sum(
+                d.rolling_disutility * sum(dev[j] for j in range(max(0, t - w + 1), t + 1)) ** 2
+            for t in T
+            )
+        assert abs((procurement_cost - utility + disutility) - self.m.ObjVal) < 1e-6, \
+            "procurement_cost - utility + disutility should equal the objective value"
 
         return Results(
             question=d.question,
             status=status,
             objective=self.m.ObjVal,
+            procurement_cost=procurement_cost,   
+            utility=utility, 
+            disutility=disutility,
             hourly=hourly,
             duals=duals,
             meta={"scalar_variables": scalars},
