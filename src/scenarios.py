@@ -69,3 +69,28 @@ def set_load_preferences(
         load_min_kWh=data.load_min_kWh if load_min_kWh is None else load_min_kWh,
         min_daily_energy_kWh=data.min_daily_energy_kWh if min_daily_energy_kWh is None else min_daily_energy_kWh,
     )
+
+def set_disutility(data: InputData, quadratic: float | None = None, linear: float | None = None) -> InputData:
+    """Override the quadratic (DKK/kWh^2) and/or linear (DKK/kWh) disutility coefficient."""
+    return replace(
+        data,
+        quadratic_disutility=data.quadratic_disutility if quadratic is None else quadratic,
+        linear_disutility=data.linear_disutility if linear is None else linear,
+    )
+
+def set_battery(data: InputData, capacity_kWh: float | None = None, max_power_kW: float | None = None,
+                efficiency: float | None = None) -> InputData:
+    """Override the battery capacity (kWh), the charging and discharging power limits (kW, both
+    set to the same value) and/or the charging and discharging efficiencies (both set to the same
+    value). The initial state of charge keeps its ratio to the capacity."""
+    soc_ratio = data.battery_initial_soc_kWh / data.battery_capacity_kWh
+    cap = data.battery_capacity_kWh if capacity_kWh is None else capacity_kWh
+    return replace(
+        data,
+        battery_capacity_kWh=cap,
+        battery_initial_soc_kWh=soc_ratio * cap,
+        battery_max_charge_kW=data.battery_max_charge_kW if max_power_kW is None else max_power_kW,
+        battery_max_discharge_kW=data.battery_max_discharge_kW if max_power_kW is None else max_power_kW,
+        battery_charging_efficiency=data.battery_charging_efficiency if efficiency is None else efficiency,
+        battery_discharging_efficiency=data.battery_discharging_efficiency if efficiency is None else efficiency,
+    )
