@@ -1,2 +1,0 @@
-status    : OPTIMAL
-objective : -0.5388 DKK

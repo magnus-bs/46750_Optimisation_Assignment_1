@@ -63,6 +63,9 @@ src/
   model.py               FlexibleConsumerModel: build() / solve() -> Results (primal + dual values)
   scenarios.py           Helpers that derive sensitivity scenarios from a base InputData
   plotting.py            Figures for inputs, optimal schedule, duals and scenario comparisons
+  model_Q3.py            Question 3: MinEnergyModel (E_min) and BatteryModel (subclass), independent of
+                         FlexibleConsumerModel; shares only Results with model.py
+  temporal_experiment.py Question 2.(e).iv: alternating vs block-ordered prices for all Q2 models
 data/
   appliance_params.json  SHARED catalogue: every PV system, flexible load and battery - see Section 4
   bus_params.json        SHARED grid connection: prices (both days) and tariffs
@@ -92,6 +95,10 @@ python main.py --question Q2_quadratic          # base case + cQ sensitivity plo
 python main.py --question Q2_temporal           # rolling-window disutility (Question 2.e)
 python main.py --temporal-experiment            # alternating-vs-block prices for all Q2 models
 python main.py --question Q1_caseA --scenarios  # + example sensitivity scenarios
+python main.py --question Q3                     # Question 3.(e): with and without E_min
+python main.py --question Q3 --scenarios         # Question 3.(f): sweeps of E_min, price spread and c^Q
+python main.py --question Q3_battery             # Question 3.(g).iv: with and without the battery
+python main.py --question Q3_battery --scenarios # Question 3.(g).v and Appendix B: value of the battery
 python main.py --show                           # open the figures in a window
 ```
 
@@ -106,6 +113,10 @@ and saves the schedule and dual plots in `results/Q2_quadratic/`. The quadratic 
 base (1.00 DKK/kWh²), low penalty (0.25 DKK/kWh²), and high penalty (2.00 DKK/kWh²), prints the
 requested metrics, and saves a load-schedule plot and CSV table in `results/Q2_quadratic/`. The
 linear and quadratic models remain separate, and their coefficients have different units.
+
+`Q2_linear` and `Q2_quadratic` additionally run the full coefficient sweeps of 2.(b).iv and 2.(c).iv
+(`CL_SWEEP` and `CQ_SWEEP` in `main.py`) and save `linear_disutility_full_sweep.csv/.png` and
+`quadratic_disutility_full_sweep.csv/.png`.
 
 Running `Q2_temporal` uses a three-hour rolling sum of signed load deviations from the
 reference profile, with \(c^W=1/9\) DKK/kWh². Its objective penalty is
@@ -130,6 +141,28 @@ cost and the model's disutility. The chosen penalty coefficients are retained fr
 Q2 cases; because they represent different preference functions and have different units,
 generalized surplus is most directly compared between price profiles within each model.
 Procurement cost and total absolute deviation are also reported for cross-model comparison.
+
+**Question 3.** The Q3 models live in `src/model_Q3.py` and are selected automatically by
+`model_for()` in `main.py`. `MinEnergyModel` is the quadratic-disutility consumer of 2.(c) with the
+minimum daily energy requirement; `BatteryModel` subclasses it and only adds the battery variables,
+the battery terms in the power balance (via `_balance_lhs`) and the state-of-charge constraints. The
+battery starts at and returns to 50 % of its capacity (end-of-horizon choice of 3.(g).i).
+
+* `--question Q3` also solves the unconstrained 2.(c) consumer on the same data (`FlexibleConsumerModel`,
+  which ignores E_min) and saves `schedule_price_q3.png`: the schedule against both the reference and
+  the 2.(c) load (top), and lambda_t against mu^E (bottom).
+* `--question Q3 --scenarios` runs one-at-a-time sweeps of E_min, the price spread (at constant mean
+  price) and c^Q. Tables (`sweep_<name>.csv`) and figures (`sweep_`, `loads_` and `deviation_<name>.png`)
+  are saved in `results/Q3/sensitivity/`, the hourly results of every run in sub-folders.
+* `--question Q3_battery` compares the consumer with and without the battery on the same data, prints the
+  value of the battery and the maximum charge/discharge overlap, and saves `battery.png`.
+* `--question Q3_battery --scenarios` computes the value of the battery (total cost without minus with
+  the battery) for sweeps of the price spread, price level, capacity, efficiency. Tables are `battery_sweep_<name>.csv`; the figures are
+  `battery_value_all.png`. The figure in the appendix was made by uncommenting/commenting the appropriate terms in run_battery_sensitivity.
+
+`src/scenarios.py` has two helpers added for Question 3: `set_disutility` (overrides c^Q and/or c^L,
+used in 3.(f)) and `set_battery` (overrides the capacity, the charging = discharging power limit and the
+efficiency; the initial state of charge keeps its ratio to the capacity; used in 3.(g).v).
 
 **Use it from a notebook or your own script** (run from the repository root):
 ```python
